@@ -104,6 +104,7 @@ void Flyout::LoadPalette() {
         p.thumbStroke = Rgba(0xFFFFFF, 0.094f);
         p.onAccent = Rgba(0x000000);
         p.toggleOffFill = Rgba(0x000000, 0.10f);
+        p.tint = Rgba(0x202020, 0.82f);
     } else {
         p.text = Rgba(0x000000, 0.894f);
         p.textSecondary = Rgba(0x000000, 0.606f);
@@ -119,6 +120,7 @@ void Flyout::LoadPalette() {
         p.thumbStroke = Rgba(0x000000, 0.10f);
         p.onAccent = Rgba(0xFFFFFF);
         p.toggleOffFill = Rgba(0x000000, 0.0241f);
+        p.tint = Rgba(0xF3F3F3, 0.82f);
     }
     pal_ = p;
 }
@@ -661,6 +663,9 @@ void Flyout::Render() {
     rt_->BeginDraw();
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
     rt_->Clear(D2D1::ColorF(0, 0, 0, 0));  // transparent: the DWM backdrop shows through
+    // The raw DWM acrylic lets a lot of what is behind show through; tint it
+    // to match Start and Quick Settings.
+    Fill({0, 0, kWidth, winH_}, pal_.tint);
     Layout(true);
     if (rt_->EndDraw() == D2DERR_RECREATE_TARGET) DiscardTarget();
 }

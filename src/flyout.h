@@ -18,6 +18,7 @@ struct Palette {
     D2D1_COLOR_F trackOff, thumb, thumbStroke;
     D2D1_COLOR_F accent, onAccent;
     D2D1_COLOR_F toggleOffFill;
+    D2D1_COLOR_F tint;  // painted over the acrylic, like WinUI's acrylic tint layer
 };
 
 class Flyout {
