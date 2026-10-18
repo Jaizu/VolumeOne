@@ -774,12 +774,8 @@ float Flyout::LayoutSettings(float y, bool draw) {
     const float x0 = 12, x1 = kWidth - 12;
     hexVisible_ = false;
 
-    Hit back{HitKind::Back, -1, -1, {x0, y + 8, x0 + 40, y + 44}};
-    Button(back, draw);
-    if (draw) {
-        Glyph(kGlyphBack, 16, back.rect, pal_.text);
-        Text(S().settings, fTitle_.Get(), {x0 + 50, y + 8, x1, y + 44}, pal_.text);
-    }
+    // Just the title: going back is the arrow in the footer, where the gear was.
+    if (draw) Text(S().settings, fTitle_.Get(), {x0 + 4, y + 8, x1, y + 44}, pal_.text);
     y += 52;
 
     auto card = [&](float top, float h) {
