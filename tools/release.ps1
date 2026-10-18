@@ -18,6 +18,6 @@ $m = [regex]::Match($changelog, "(?ms)^## $([regex]::Escape($v))\s*\r?\n(.*?)(?=
 if (-not $m.Success) { throw "CHANGELOG.md has no section for $v." }
 $notes = $m.Groups[1].Value.Trim()
 $notesFile = Join-Path $env:TEMP "volumeone-notes-$v.md"
-Set-Content $notesFile $notes -Encoding utf8
+[IO.File]::WriteAllText($notesFile, $notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM
 
 gh release create "v$v" $Exe --repo Jaizu/VolumeOne --title "VolumeOne $v" --notes-file $notesFile

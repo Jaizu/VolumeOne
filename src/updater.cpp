@@ -132,7 +132,7 @@ static std::wstring StripMarkdown(const std::wstring& md) {
         std::wstring t = md.substr(start, end - start);
         start = end + 1;
 
-        size_t i = t.find_first_not_of(L" \t#");
+        size_t i = t.find_first_not_of(L" \t#﻿");  // also skips a BOM
         t = i == std::wstring::npos ? L"" : t.substr(i);
         if (t.rfind(L"- ", 0) == 0 || t.rfind(L"* ", 0) == 0) t = L"• " + t.substr(2);
         std::wstring clean;
