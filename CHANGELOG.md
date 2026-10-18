@@ -10,6 +10,8 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 
 ### Changed
 - The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
+- The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place.
+- In Settings, the footer has a back arrow (in the gear's place) instead of the Exit button. Exit is still in the tray icon's right-click menu.
 
 ### Fixed
 - The header of an expanded device is now the same height as a collapsed one, so its hover highlight is centred on the name and icon.

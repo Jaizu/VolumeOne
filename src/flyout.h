@@ -33,7 +33,6 @@ struct UpdateState {
 class Flyout {
 public:
     std::function<void()> onHideIconChanged;   // also called when "use the Windows icon" changes
-    std::function<void()> onExit;
     std::function<void()> onCheckUpdates;
     std::function<void()> onInstallUpdate;
 
@@ -54,7 +53,7 @@ private:
     enum class View { Mixer, Settings };
     enum class HitKind {
         None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
-        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Exit
+        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate
     };
     struct Hit {
         HitKind kind = HitKind::None;
@@ -62,6 +61,7 @@ private:
         int app = -1;  // -1 = device master volume
         D2D1_RECT_F rect{};
         float trackX0 = 0, trackX1 = 0;  // sliders only
+        bool footer = false;              // in the fixed footer, not the scrolling content
         bool operator==(const Hit& o) const { return kind == o.kind && device == o.device && app == o.app; }
     };
 

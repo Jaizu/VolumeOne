@@ -272,7 +272,6 @@ void EnsureFlyout() {
         g_tapRetries = 0;
         StartTapSync();
     };
-    g_flyout.onExit = [] { DestroyWindow(g_host); };
     g_flyout.onCheckUpdates = [] { CheckForUpdates(true); };
     g_flyout.onInstallUpdate = [] { InstallUpdate(); };
 }

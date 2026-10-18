@@ -7,7 +7,7 @@
 #include <cmath>
 
 static const float kWidth = 360.0f;
-static const float kFooterHeight = 52.0f;
+static const float kFooterHeight = 48.0f;  // same as the Quick Settings footer
 static const UINT_PTR kMeterTimer = 1;
 static const UINT WM_OUTSIDE_CLICK = WM_APP + 100;
 
@@ -64,7 +64,6 @@ static wchar_t VolumeGlyph(float v, bool muted) {
 
 static std::wstring Percent(float v) { return std::to_wstring((int)std::lround(v * 100.0f)); }
 
-static bool IsFooterHit(int kind, int gear, int sound, int exit) { return kind == gear || kind == sound || kind == exit; }
 
 // ---------------------------------------------------------------------------
 
@@ -125,7 +124,7 @@ void Flyout::LoadPalette() {
         p.card = Rgba(0xFFFFFF, 0.0512f);
         p.cardStroke = Rgba(0x000000, 0.10f);
         p.divider = Rgba(0xFFFFFF, 0.0837f);
-        p.footer = Rgba(0x000000, 0.12f);
+        p.footer = Rgba(0x000000, 0.2f);  // ~#212121 on the tinted backdrop, like Quick Settings
         p.trackOff = Rgba(0xFFFFFF, 0.545f);
         p.thumb = Rgba(0x454545);
         p.thumbStroke = Rgba(0xFFFFFF, 0.094f);
@@ -888,24 +887,24 @@ float Flyout::LayoutSettings(float y, bool draw) {
 }
 
 void Flyout::LayoutFooter(float top, bool draw) {
-    if (draw) {
-        Fill({0, top, kWidth, top + kFooterHeight}, pal_.footer);
-        Fill({0, top, kWidth, top + 1}, pal_.divider);
-    }
+    // Matches the Quick Settings footer: 48 tall, darker band, no divider,
+    // a 16 px icon button centred 32 px from the right edge. The same spot
+    // holds the gear in the mixer and the back arrow in Settings.
+    if (draw) Fill({0, top, kWidth, top + kFooterHeight}, pal_.footer);
+    Hit corner{view_ == View::Mixer ? HitKind::Gear : HitKind::Back, -1, -1,
+               {kWidth - 50, top + 6, kWidth - 14, top + 42}};
+    corner.footer = true;
+    Button(corner, draw);
+    if (draw) Glyph(view_ == View::Mixer ? kGlyphSettings : kGlyphBack, 16, corner.rect, pal_.text);
+
     if (view_ == View::Mixer) {
         float tw = TextWidth(S().soundSettings, fBody_.Get());
-        Hit sound{HitKind::SoundSettings, -1, -1, {12, top + 10, 12 + tw + 24, top + 42}};
+        Hit sound{HitKind::SoundSettings, -1, -1, {12, top + 8, 12 + tw + 24, top + 40}};
+        sound.footer = true;
         Button(sound, draw);
         if (draw) Text(S().soundSettings, fBody_.Get(), sound.rect, pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
-        Hit gear{HitKind::Gear, -1, -1, {kWidth - 12 - 40, top + 8, kWidth - 12, top + 44}};
-        Button(gear, draw);
-        if (draw) Glyph(kGlyphSettings, 16, gear.rect, pal_.text);
-    } else {
-        if (draw) Text(APP_NAME L" " APP_VERSION, fCaption_.Get(), {20, top, 220, top + kFooterHeight}, pal_.textTertiary);
-        float tw = TextWidth(S().exit, fBody_.Get());
-        Hit exit{HitKind::Exit, -1, -1, {kWidth - 12 - tw - 32, top + 10, kWidth - 12, top + 42}};
-        Button(exit, draw);
-        if (draw) Text(S().exit, fBody_.Get(), exit.rect, pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
+    } else if (draw) {
+        Text(APP_NAME L" " APP_VERSION, fCaption_.Get(), {24, top, 220, top + kFooterHeight}, pal_.textTertiary);
     }
 }
 
@@ -926,8 +925,7 @@ void Flyout::Render() {
 
 Flyout::Hit Flyout::HitTest(float x, float y) const {
     for (const Hit& h : hits_) {
-        bool footer = IsFooterHit((int)h.kind, (int)HitKind::Gear, (int)HitKind::SoundSettings, (int)HitKind::Exit);
-        if (!footer && y >= contentBottom_) continue;
+        if (!h.footer && y >= contentBottom_) continue;  // content scrolled under the footer
         if (x >= h.rect.left && x < h.rect.right && y >= h.rect.top && y < h.rect.bottom) return h;
     }
     return Hit{};
@@ -1109,9 +1107,6 @@ void Flyout::Activate(const Hit& h) {
         case HitKind::InstallUpdate:
             if (onInstallUpdate) onInstallUpdate();
             break;
-        case HitKind::Exit:
-            if (onExit) onExit();
-            return;
         default:
             break;
     }
