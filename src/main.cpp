@@ -6,7 +6,10 @@
 #include "tapclient.h"
 #include "updater.h"
 
+#include <shlobj.h>
+
 #include <atomic>
+#include <filesystem>
 #include <cmath>
 
 namespace {
@@ -39,6 +42,8 @@ bool g_trayLight = false;
 
 std::atomic<bool> g_tapBusy{false};
 int g_tapRetries = 0;
+
+bool g_restoreOnExit = false;  // "Close and restore Windows" was chosen
 
 UpdateState g_update;
 Updater::ReleaseInfo g_release;
@@ -262,6 +267,100 @@ void InstallUpdate() {
     if (h) CloseHandle(h);
 }
 
+// --- Where the exe lives ------------------------------------------------------
+
+#define MOVED_ARG L"/moved"
+
+static std::wstring KnownFolder(REFKNOWNFOLDERID id) {
+    PWSTR p = nullptr;
+    std::wstring s;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &p))) s = p;
+    CoTaskMemFree(p);
+    return s;
+}
+
+// Localized name of a known folder ("Descargas", "Downloads", ...).
+static std::wstring KnownFolderName(REFKNOWNFOLDERID id) {
+    ComPtr<IShellItem> item;
+    PWSTR name = nullptr;
+    std::wstring s;
+    if (SUCCEEDED(SHGetKnownFolderItem(id, KF_FLAG_DEFAULT, nullptr, IID_PPV_ARGS(&item))) &&
+        SUCCEEDED(item->GetDisplayName(SIGDN_NORMALDISPLAY, &name)))
+        s = name;
+    CoTaskMemFree(name);
+    return s;
+}
+
+static bool IsInside(const std::wstring& path, const std::wstring& folder) {
+    if (folder.empty() || path.size() <= folder.size()) return false;
+    return _wcsnicmp(path.c_str(), folder.c_str(), folder.size()) == 0 && (path[folder.size()] == L'\\');
+}
+
+// Name of the folder if the exe is somewhere that tends to get cleaned up
+// (Downloads, Desktop, Temp), empty otherwise. Known folders, so it works
+// whatever the Windows language or if the folders were moved.
+std::wstring RiskyLocationName() {
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    for (REFKNOWNFOLDERID id : {FOLDERID_Downloads, FOLDERID_Desktop})
+        if (IsInside(exe, KnownFolder(id))) return KnownFolderName(id);
+    wchar_t temp[MAX_PATH];
+    if (GetTempPathW(MAX_PATH, temp)) {
+        std::wstring t = temp;
+        if (!t.empty() && t.back() == L'\\') t.pop_back();
+        if (IsInside(exe, t)) return L"Temp";
+    }
+    return {};
+}
+
+// Copies the exe to Documents\VolumeOne, points "Start with Windows" there,
+// and starts the copy, which deletes this one once we have exited.
+bool MoveToDocuments() {
+    std::wstring dir = KnownFolder(FOLDERID_Documents);
+    if (dir.empty()) return false;
+    dir += L"\\VolumeOne";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring target = dir + L"\\VolumeOne.exe";
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (!CopyFileW(exe, target.c_str(), FALSE)) return false;
+    if (GetStartWithWindows()) SetStartWithWindows(true, target.c_str());
+
+    std::wstring cmd = L"\"" + target + L"\" " MOVED_ARG L" " + std::to_wstring(GetCurrentProcessId()) + L" \"" + exe + L"\"";
+    STARTUPINFOW si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessW(target.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+// The moved copy: wait for the old process, then delete the old exe.
+void FinishMove(const wchar_t* cmdLine) {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(cmdLine, &argc);
+    for (int i = 0; argv && i + 2 < argc; i++) {
+        if (wcscmp(argv[i], MOVED_ARG) != 0) continue;
+        if (HANDLE old = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)_wtoi(argv[i + 1]))) {
+            WaitForSingleObject(old, 15000);
+            CloseHandle(old);
+        }
+        for (int t = 0; t < 10 && !DeleteFileW(argv[i + 2]) && GetLastError() != ERROR_FILE_NOT_FOUND; t++) Sleep(500);
+        break;
+    }
+    LocalFree(argv);
+}
+
+// "Close and restore Windows": no startup entry, no settings, and after the
+// message loop ends, explorer/ShellHost are restarted without our dll and the
+// app data folder is deleted.
+void CloseAndRestore() {
+    SetStartWithWindows(false);
+    RegDeleteTreeW(HKEY_CURRENT_USER, APP_REG_KEY);
+    g_restoreOnExit = true;
+    DestroyWindow(g_host);
+}
+
 // --- Flyout & menu ----------------------------------------------------------
 
 void EnsureFlyout() {
@@ -273,6 +372,14 @@ void EnsureFlyout() {
         StartTapSync();
     };
     g_flyout.onCheckUpdates = [] { CheckForUpdates(true); };
+    g_flyout.onCloseAndRestore = [] { CloseAndRestore(); };
+    g_flyout.onMoveToDocuments = [] {
+        if (MoveToDocuments())
+            DestroyWindow(g_host);
+        else
+            MessageBoxW(g_flyout.Hwnd(), S().moveFailed, APP_NAME, MB_OK | MB_ICONWARNING);
+    };
+    g_flyout.locationName = RiskyLocationName();
     g_flyout.onInstallUpdate = [] { InstallUpdate(); };
 }
 
@@ -428,7 +535,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_APP_SHOW_FLYOUT:
             EnsureFlyout();
-            g_flyout.Show();
+            g_flyout.Show(wp != 0);  // wParam 1: open in Settings (the /settings argument)
             return 0;
 
         case WM_APP_TAP_DONE:
@@ -491,6 +598,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // After an update the new exe is started by the old one: wait for it to
     // exit (it holds the single-instance mutex) and delete the old file.
     if (const wchar_t* upd = wcsstr(cmdLine, UPDATED_ARG)) Updater::FinishUpdate((DWORD)_wtoi(upd + wcslen(UPDATED_ARG)));
+    // Same after "Move to Documents".
+    if (wcsstr(cmdLine, MOVED_ARG)) FinishMove(GetCommandLineW());
 
     // Single instance: a second launch just opens the running one's flyout.
     g_runningMutex = CreateMutexW(nullptr, FALSE, RUNNING_MUTEX_NAME);
@@ -499,11 +608,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
             DWORD pid = 0;
             GetWindowThreadProcessId(other, &pid);
             AllowSetForegroundWindow(pid);
-            PostMessageW(other, WM_APP_SHOW_FLYOUT, 0, 0);
+            PostMessageW(other, WM_APP_SHOW_FLYOUT, wcsstr(cmdLine, L"/settings") != nullptr, 0);
         }
         return 0;
     }
-    bool background = wcsstr(cmdLine, L"/background") != nullptr || wcsstr(cmdLine, UPDATED_ARG) != nullptr;
+    bool background = wcsstr(cmdLine, L"/background") != nullptr || wcsstr(cmdLine, UPDATED_ARG) != nullptr ||
+                      wcsstr(cmdLine, MOVED_ARG) != nullptr;
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     InitDarkMenus();
@@ -538,6 +648,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // The host window is gone now, so the explorer dll restores the Windows
     // volume icon when it re-checks.
     TapClient::Notify();
+    if (g_restoreOnExit) {
+        TapClient::Unload();
+        std::error_code ec;
+        wchar_t* local = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local)))
+            std::filesystem::remove_all(std::filesystem::path(local) / APP_NAME, ec);
+        CoTaskMemFree(local);
+    }
     CloseHandle(g_runningMutex);
     CoUninitialize();
     return 0;

@@ -48,6 +48,7 @@ enum : wchar_t {
     kGlyphMicrophone = 0xE720,
     kGlyphDownload = 0xE896,
     kGlyphVolumeBars = 0xEBC5,
+    kGlyphWarning = 0xE7BA,
 };
 
 static D2D1_COLOR_F Rgba(UINT rgb, float a = 1.0f) {
@@ -85,7 +86,7 @@ bool Flyout::Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* s
     wc.lpszClassName = L"VolumeOne.Flyout";
     RegisterClassExW(&wc);
 
-    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName, APP_NAME, WS_POPUP, 0, 0, 10, 10,
+    hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, wc.lpszClassName, APP_NAME, WS_POPUP | WS_CLIPCHILDREN, 0, 0, 10, 10,
                             owner, nullptr, inst, this);
     if (!hwnd_) return false;
 
@@ -152,10 +153,8 @@ void Flyout::LoadPalette() {
     }
     // Level meter: the accent mixed towards white, solid, so it stands out
     // against the filled part of the slider in both themes.
-    float mix = dark ? 0.6f : 0.5f;
-    p.meter = D2D1::ColorF(accent.r + (1 - accent.r) * mix, accent.g + (1 - accent.g) * mix,
-                           accent.b + (1 - accent.b) * mix, 1.0f);
     pal_ = p;
+    pal_.meter = MeterColorFor((Settings::MeterColor)settings_->meterColor);
 }
 
 void Flyout::ApplyWindowStyle() {
@@ -237,6 +236,10 @@ void Flyout::Show(bool settingsView) {
     }
     view_ = settingsView ? View::Settings : View::Mixer;
     scroll_ = 0;
+    pending_ = false;
+    gear_.Set(0);
+    arrow_.Set(0);
+    transition_.Set(1);
     hover_ = pressed_ = Hit{};
     startup_ = GetStartWithWindows();
     audio_->SetTrackSessions(true);
@@ -281,6 +284,7 @@ void Flyout::Hide() {
     if (!visible_) return;
     visible_ = false;
     KillTimer(hwnd_, kMeterTimer);
+    if (hexEdit_) ShowWindow(hexEdit_, SW_HIDE);
     if (g_mouseHook) {
         UnhookWindowsHookEx(g_mouseHook);
         g_mouseHook = nullptr;
@@ -615,7 +619,20 @@ float Flyout::Layout(bool draw) {
     contentBottom_ = winH_ - kFooterHeight;
     if (draw) rt_->PushAxisAlignedClip({0, 0, kWidth, contentBottom_}, D2D1_ANTIALIAS_MODE_ALIASED);
     float y0 = -scroll_;
+    // Entrance of a view after switching: slide 24 DIPs and fade in.
+    bool entering = draw && transition_.Running();
+    if (entering) {
+        float v = transition_.Value();
+        rt_->SetTransform(D2D1::Matrix3x2F::Translation(transitionDir_ * 24.0f * (1 - v), 0));
+        rt_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                             D2D1::IdentityMatrix(), v),
+                       nullptr);
+    }
     float end = view_ == View::Mixer ? LayoutMixer(y0, draw) : LayoutSettings(y0, draw);
+    if (entering) {
+        rt_->PopLayer();
+        rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
     if (draw) rt_->PopAxisAlignedClip();
     LayoutFooter(contentBottom_, draw);
     return (end - y0) + kFooterHeight;
@@ -626,6 +643,27 @@ float Flyout::LayoutMixer(float y, bool draw) {
     auto& devices = audio_->Devices();
     auto visible = VisibleDevices();
     y += 12;
+
+    // Warning when the exe lives somewhere that gets cleaned up (Downloads...),
+    // in the style of a WinUI "caution" InfoBar.
+    if (!locationName.empty()) {
+        std::wstring text = Fmt(S().locationWarning, locationName);
+        float th = TextHeight(text, fDesc_.Get(), x1 - x0 - 56);
+        float bw = TextWidth(S().moveToDocuments, fBody_.Get()) + 28;
+        float h = 12 + th + 8 + 32 + 12;
+        Hit move{HitKind::MoveToDocuments, -1, -1, {x0 + 44, y + 12 + th + 8, x0 + 44 + bw, y + 12 + th + 40}};
+        hits_.push_back(move);
+        if (draw) {
+            Fill({x0, y, x1, y + h}, pal_.dark ? Rgba(0x433519) : Rgba(0xFFF4CE), 8);
+            Stroke({x0, y, x1, y + h}, pal_.cardStroke, 8);
+            Glyph(kGlyphWarning, 16, {x0 + 12, y + 10, x0 + 36, y + 30}, pal_.dark ? Rgba(0xFCE100) : Rgba(0x9D5D00));
+            Text(text, fDesc_.Get(), {x0 + 44, y + 12, x1 - 12, y + 12 + th}, pal_.text);
+            Fill(move.rect, hover_ == move ? pal_.subtleHover : pal_.toggleOffFill, 4);
+            Stroke(move.rect, pal_.cardStroke, 4);
+            Text(S().moveToDocuments, fBody_.Get(), move.rect, pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        y += h + 8;
+    }
 
     // Update banner.
     if (update_ && (update_->status == UpdateState::Available || update_->status == UpdateState::Installing ||
@@ -645,7 +683,7 @@ float Flyout::LayoutMixer(float y, bool draw) {
             Fill({x0, y, x1, y + h}, pal_.card, 8);
             Stroke({x0, y, x1, y + h}, pal_.cardStroke, 8);
             Glyph(kGlyphDownload, 16, {x0 + 12, y, x0 + 40, y + h}, pal_.accent);
-            Text(std::wstring(S().updateAvailable) + update_->version, fBody_.Get(), {x0 + 46, y, btn.rect.left - 8, y + h},
+            Text(Fmt(S().updateAvailable, update_->version), fBody_.Get(), {x0 + 46, y, btn.rect.left - 8, y + h},
                  pal_.text);
             D2D1_COLOR_F fill = pal_.accent;
             if (installing) fill.a = 0.5f;
@@ -728,6 +766,7 @@ float Flyout::LayoutMixer(float y, bool draw) {
 
 float Flyout::LayoutSettings(float y, bool draw) {
     const float x0 = 12, x1 = kWidth - 12;
+    hexVisible_ = false;
 
     Hit back{HitKind::Back, -1, -1, {x0, y + 8, x0 + 40, y + 44}};
     Button(back, draw);
@@ -742,12 +781,21 @@ float Flyout::LayoutSettings(float y, bool draw) {
         Fill({x0, top, x1, top + h}, pal_.card, 8);
         Stroke({x0, top, x1, top + h}, pal_.cardStroke, 8);
     };
-    auto section = [&](const wchar_t* title, const wchar_t* desc) {
-        if (draw) Text(title, fTitle_.Get(), {x0 + 4, y, x1, y + 20}, pal_.text);
-        y += 22;
-        float dh = TextHeight(desc, fDesc_.Get(), x1 - x0 - 8);
-        if (draw) Text(desc, fDesc_.Get(), {x0 + 4, y, x1 - 4, y + dh}, pal_.textSecondary);
-        y += dh + 8;
+    // Section title + description; clickable (with a chevron) when it can
+    // collapse.
+    auto section = [&](const wchar_t* title, const wchar_t* desc, HitKind kind, bool expanded) {
+        float dh = TextHeight(desc, fDesc_.Get(), x1 - x0 - 48);
+        float h = 22 + dh + 12;
+        if (kind != HitKind::None) {
+            Hit hdr{kind, -1, -1, {x0 - 4, y - 6, x1 + 4, y - 6 + h}};
+            Button(hdr, draw, 6);
+            if (draw) Glyph(expanded ? kGlyphChevronUp : kGlyphChevronDown, 12, {x1 - 28, y, x1 - 4, y + 20}, pal_.textSecondary);
+        }
+        if (draw) {
+            Text(title, fTitle_.Get(), {x0 + 4, y, x1 - 32, y + 20}, pal_.text);
+            Text(desc, fDesc_.Get(), {x0 + 4, y + 22, x1 - 32, y + 22 + dh}, pal_.textSecondary);
+        }
+        y += h;
     };
 
     // General toggles.
@@ -786,49 +834,116 @@ float Flyout::LayoutSettings(float y, bool draw) {
         }
         ry += heights[i];
     }
-    y += cardH + 20;
+    y += cardH + 12;
 
-    // Output devices: icon button + visibility toggle.
-    section(S().outputDevices, S().outputDevicesDesc);
-    auto& devices = audio_->Devices();
-    float devH = 48.0f * devices.size();
-    card(y, devH);
-    for (int i = 0; i < (int)devices.size(); i++) {
-        const AudioDevice& d = devices[i];
-        float top = y + 48.0f * i;
-        bool shown = !settings_->IsDeviceHidden(d.id);
-        D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
-        Hit icon{HitKind::IconPick, i, -1, {x0 + 4, top + 4, x0 + 44, top + 44}};
-        Button(icon, draw);
-        Hit h{HitKind::ToggleDevice, i, -1, {x0 + 46, top, x1, top + 48}};
-        ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
+    // Level meter colour: four choices, plus a hex field for "custom".
+    {
+        bool custom = settings_->meterColor == Settings::MeterCustom;
+        float dh = TextHeight(S().meterColorDesc, fDesc_.Get(), x1 - x0 - 32);
+        float h = 12 + 20 + dh + 10 + 32 + 12 + (custom ? 40 : 0);
+        card(y, h);
         if (draw) {
-            if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
-            DeviceIcon(d, icon.rect, 16, c);
-            Text(d.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
+            Text(S().meterColor, fBody_.Get(), {textX, y + 12, x1 - 16, y + 32}, pal_.text);
+            Text(S().meterColorDesc, fDesc_.Get(), {textX, y + 32, x1 - 16, y + 32 + dh}, pal_.textSecondary);
         }
+        const wchar_t* labels[] = {S().meterAccent, S().meterWhite, S().meterGreen, S().meterCustom};
+        float cy = y + 32 + dh + 10;
+        float gap = 6, cw = (x1 - x0 - 32 - gap * 3) / 4;
+        for (int i = 0; i < 4; i++) {
+            float cx = textX + i * (cw + gap);
+            Hit chip{HitKind::MeterOption, i, -1, {cx, cy, cx + cw, cy + 32}};
+            hits_.push_back(chip);
+            if (!draw) continue;
+            bool selected = (int)settings_->meterColor == i;
+            Fill(chip.rect, hover_ == chip ? pal_.subtleHover : pal_.toggleOffFill, 4);
+            Stroke(chip.rect, selected ? pal_.accent : pal_.cardStroke, 4, selected ? 2.0f : 1.0f);
+            brush_->SetColor(MeterColorFor((Settings::MeterColor)i));
+            rt_->FillEllipse(D2D1::Ellipse({cx + 14, cy + 16}, 5, 5), brush_.Get());
+            Text(labels[i], fCaption_.Get(), {cx + 24, cy, cx + cw - 4, cy + 32}, pal_.text);
+        }
+        if (custom) {
+            float fy = cy + 40;
+            hexRect_ = {textX, fy, textX + 112, fy + 32};
+            hexVisible_ = true;
+            if (draw) {
+                Fill(hexRect_, pal_.toggleOffFill, 4);
+                Stroke(hexRect_, pal_.cardStroke, 4);
+                Fill({hexRect_.left + 4, hexRect_.bottom - 2, hexRect_.right - 4, hexRect_.bottom - 1}, pal_.accent);
+                Text(L"#", fBody_.Get(), {hexRect_.left + 10, fy, hexRect_.left + 24, fy + 32}, pal_.textSecondary);
+            }
+        }
+        y += h + 20;
     }
-    y += devH + 20;
 
-    // Input devices: visibility in the right-click menu.
-    section(S().inputDevices, S().inputDevicesDesc);
-    auto& inputs = audio_->Inputs();
-    float inH = 48.0f * inputs.size();
-    card(y, inH);
-    for (int i = 0; i < (int)inputs.size(); i++) {
-        const InputDevice& in = inputs[i];
-        float top = y + 48.0f * i;
-        bool shown = !settings_->IsDeviceHidden(in.id);
-        D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
-        Hit h{HitKind::ToggleInput, i, -1, {x0, top, x1, top + 48}};
-        ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
-        if (draw) {
-            if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
-            Glyph(kGlyphMicrophone, 16, {x0 + 4, top + 4, x0 + 44, top + 44}, c);
-            Text(in.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
+    // Output devices: icon button + visibility toggle. Collapsed by default.
+    section(S().outputDevices, S().outputDevicesDesc, HitKind::SectionOutputs, outputsExpanded_);
+    if (outputsExpanded_) {
+        auto& devices = audio_->Devices();
+        float devH = 48.0f * devices.size();
+        card(y, devH);
+        for (int i = 0; i < (int)devices.size(); i++) {
+            const AudioDevice& d = devices[i];
+            float top = y + 48.0f * i;
+            bool shown = !settings_->IsDeviceHidden(d.id);
+            D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
+            Hit icon{HitKind::IconPick, i, -1, {x0 + 4, top + 4, x0 + 44, top + 44}};
+            Button(icon, draw);
+            Hit h{HitKind::ToggleDevice, i, -1, {x0 + 46, top, x1, top + 48}};
+            ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
+            if (draw) {
+                if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
+                DeviceIcon(d, icon.rect, 16, c);
+                Text(d.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
+            }
         }
+        y += devH + 12;
     }
-    y += inH + 20;
+    y += 8;
+
+    // Input devices: visibility in the right-click menu. Collapsed by default.
+    section(S().inputDevices, S().inputDevicesDesc, HitKind::SectionInputs, inputsExpanded_);
+    if (inputsExpanded_) {
+        auto& inputs = audio_->Inputs();
+        float inH = 48.0f * inputs.size();
+        card(y, inH);
+        for (int i = 0; i < (int)inputs.size(); i++) {
+            const InputDevice& in = inputs[i];
+            float top = y + 48.0f * i;
+            bool shown = !settings_->IsDeviceHidden(in.id);
+            D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
+            Hit h{HitKind::ToggleInput, i, -1, {x0, top, x1, top + 48}};
+            ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
+            if (draw) {
+                if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
+                Glyph(kGlyphMicrophone, 16, {x0 + 4, top + 4, x0 + 44, top + 44}, c);
+                Text(in.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
+            }
+        }
+        y += inH + 12;
+    }
+    y += 8;
+
+    // A labelled row with a button on the right, in its own card.
+    auto buttonRow = [&](const wchar_t* label, const std::wstring& desc, const wchar_t* button, HitKind kind, bool accent,
+                         bool enabled) {
+        float bw = TextWidth(button, fBody_.Get()) + 28;
+        float dh = TextHeight(desc, fDesc_.Get(), x1 - 12 - bw - 8 - textX);
+        float h = std::max(64.0f, 12 + 20 + dh + 12);
+        card(y, h);
+        Hit btn{kind, -1, -1, {x1 - 12 - bw, y + h / 2 - 16, x1 - 12, y + h / 2 + 16}};
+        if (enabled) hits_.push_back(btn);
+        if (draw) {
+            Text(label, fBody_.Get(), {textX, y + 12, btn.rect.left - 8, y + 32}, pal_.text);
+            Text(desc, fDesc_.Get(), {textX, y + 32, btn.rect.left - 8, y + 32 + dh}, pal_.textSecondary);
+            D2D1_COLOR_F fill = accent ? pal_.accent : pal_.toggleOffFill;
+            if (!enabled) fill.a *= 0.5f;
+            else if (hover_ == btn) fill = accent ? D2D1::ColorF(fill.r, fill.g, fill.b, 0.9f) : pal_.subtleHover;
+            Fill(btn.rect, fill, 4);
+            if (!accent) Stroke(btn.rect, pal_.cardStroke, 4);
+            Text(button, fBody_.Get(), btn.rect, accent ? pal_.onAccent : pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        y += h + 12;
+    };
 
     // Updates.
     {
@@ -842,7 +957,7 @@ float Flyout::LayoutSettings(float y, bool draw) {
             case UpdateState::Failed: status += std::wstring(L" · ") + S().checkFailed; break;
             case UpdateState::Available:
             case UpdateState::InstallFailed:
-                status += std::wstring(L" · ") + S().updateAvailable + update_->version;
+                status += L" · " + Fmt(S().updateAvailable, update_->version);
                 button = S().updateNow;
                 kind = HitKind::InstallUpdate;
                 break;
@@ -852,29 +967,13 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 break;
             default: break;
         }
-        float bw = TextWidth(button, fBody_.Get()) + 28;
-        const float h = 64;
-        card(y, h);
-        Hit btn{kind, -1, -1, {x1 - 12 - bw, y + 16, x1 - 12, y + 48}};
-        if (enabled) Button(btn, false);
-        if (draw) {
-            Text(S().updates, fBody_.Get(), {x0 + 16, y + 12, btn.rect.left - 8, y + 32}, pal_.text);
-            Text(status, fCaption_.Get(), {x0 + 16, y + 32, btn.rect.left - 8, y + 50}, pal_.textSecondary);
-            bool accent = kind == HitKind::InstallUpdate;
-            D2D1_COLOR_F fill = accent ? pal_.accent : pal_.card;
-            if (!enabled) fill.a *= 0.5f;
-            else if (hover_ == btn) fill = accent ? D2D1::ColorF(fill.r, fill.g, fill.b, 0.9f) : pal_.subtleHover;
-            Fill(btn.rect, fill, 4);
-            if (!accent) Stroke(btn.rect, pal_.cardStroke, 4);
-            Text(button, fBody_.Get(), btn.rect, accent ? pal_.onAccent : pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
-        }
-        y += h + 12;
+        buttonRow(S().updates, status, button, kind, kind == HitKind::InstallUpdate, enabled);
 
         bool hasUpdate = update_ && (update_->status == UpdateState::Available ||
                                      update_->status == UpdateState::InstallFailed ||
                                      update_->status == UpdateState::Installing);
         if (hasUpdate && !update_->notes.empty()) {
-            std::wstring title = std::wstring(S().whatsNew) + update_->version;
+            std::wstring title = Fmt(S().whatsNew, update_->version);
             float nh = TextHeight(update_->notes, fDesc_.Get(), x1 - x0 - 32);
             if (draw) Text(title, fTitle_.Get(), {x0 + 4, y, x1, y + 20}, pal_.text);
             y += 26;
@@ -883,6 +982,9 @@ float Flyout::LayoutSettings(float y, bool draw) {
             y += nh + 24 + 12;
         }
     }
+
+    // Leave: close and put Windows back as it was.
+    buttonRow(S().closeAndRestore, S().closeAndRestoreDesc, S().closeAndRestoreButton, HitKind::CloseRestore, false, true);
     return y;
 }
 
@@ -899,7 +1001,7 @@ void Flyout::LayoutFooter(float top, bool draw) {
         if (view_ == View::Mixer)
             DrawGear(corner.rect, pal_.text);
         else
-            Glyph(kGlyphBack, 16, corner.rect, pal_.text);
+            DrawRotatedGlyph(kGlyphBack, 16, corner.rect, pal_.text, arrow_.Value());
     }
 
     if (view_ == View::Mixer) {
@@ -923,6 +1025,7 @@ void Flyout::Render() {
     Fill({0, 0, kWidth, winH_}, pal_.tint);
     Layout(true);
     if (rt_->EndDraw() == D2DERR_RECREATE_TARGET) DiscardTarget();
+    UpdateHexEdit();
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,18 +1157,40 @@ void Flyout::Activate(const Hit& h) {
             }
             break;
         case HitKind::Gear:
-            gearFrom_ = gearTo_ = 0;  // straight again when coming back
-            gearHot_ = false;
-            view_ = View::Settings;
-            scroll_ = 0;
-            startup_ = GetStartWithWindows();
-            Reposition(false);
+            GoToView(View::Settings);
             break;
         case HitKind::Back:
-            view_ = View::Mixer;
-            scroll_ = 0;
+            GoToView(View::Mixer);
+            break;
+        case HitKind::SectionOutputs:
+            outputsExpanded_ = !outputsExpanded_;
             Reposition(false);
             break;
+        case HitKind::SectionInputs:
+            inputsExpanded_ = !inputsExpanded_;
+            Reposition(false);
+            break;
+        case HitKind::MeterOption:
+            settings_->meterColor = (DWORD)h.device;
+            settings_->Save();
+            pal_.meter = MeterColorFor((Settings::MeterColor)settings_->meterColor);
+            Reposition(false);  // the custom colour field adds a row
+            if (h.device == Settings::MeterCustom && hexEdit_) SetFocus(hexEdit_);
+            break;
+        case HitKind::CloseRestore: {
+            modal_ = true;
+            int answer = MessageBoxW(hwnd_, S().closeConfirm, S().closeConfirmTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+            modal_ = false;
+            if (answer == IDYES && onCloseAndRestore) {
+                Hide();
+                onCloseAndRestore();
+                return;
+            }
+            break;
+        }
+        case HitKind::MoveToDocuments:
+            if (onMoveToDocuments) onMoveToDocuments();
+            return;
         case HitKind::SoundSettings:
             Hide();
             ShellExecuteW(nullptr, L"open", L"ms-settings:sound", nullptr, nullptr, SW_SHOWNORMAL);
@@ -1150,20 +1275,104 @@ static ComPtr<ID2D1PathGeometry> MakeGearGeometry(ID2D1Factory* f) {
     return geo;
 }
 
-float Flyout::GearAngle(bool* animating) const {
-    float t = (GetTickCount64() - gearStart_) / gearMs_;
-    if (animating) *animating = t < 1.0f;
-    if (t >= 1.0f) return gearTo_;
-    float e = 1.0f - std::pow(1.0f - t, 3.0f);
-    return gearFrom_ + (gearTo_ - gearFrom_) * e;
+// ---------------------------------------------------------------------------
+// View changes: the footer icon turns first (gear: half a turn; back arrow:
+// from pointing left to pointing down), then the new view slides in.
+
+static const float kIconTurnMs = 320, kSwitchDelayMs = 150, kTransitionMs = 220;
+
+void Flyout::GoToView(View v) {
+    if (pending_ || v == view_) return;
+    if (v == View::Settings)
+        gear_.Go(180, kIconTurnMs);
+    else
+        arrow_.Go(-90, kIconTurnMs);
+    pending_ = true;
+    pendingView_ = v;
+    pendingAt_ = GetTickCount64() + (ULONGLONG)kSwitchDelayMs;
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void Flyout::AnimateGear(float toDegrees, float ms) {
-    gearFrom_ = GearAngle();
-    gearTo_ = toDegrees;
-    gearMs_ = ms;
-    gearStart_ = GetTickCount64();
-    InvalidateRect(hwnd_, nullptr, FALSE);
+void Flyout::SwitchView(View v) {
+    pending_ = false;
+    view_ = v;
+    scroll_ = 0;
+    hover_ = pressed_ = Hit{};
+    if (v == View::Settings) startup_ = GetStartWithWindows();
+    gear_.Set(0);
+    arrow_.Set(0);
+    transitionDir_ = v == View::Settings ? 1 : -1;
+    transition_.Set(0);
+    transition_.Go(1, kTransitionMs);
+    Reposition(false);
+}
+
+bool Flyout::Animating() const {
+    return pending_ || gear_.Running() || arrow_.Running() || transition_.Running();
+}
+
+void Flyout::DrawRotatedGlyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float degrees) {
+    D2D1_MATRIX_3X2_F old;
+    rt_->GetTransform(&old);
+    D2D1_POINT_2F center = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+    rt_->SetTransform(D2D1::Matrix3x2F::Rotation(degrees, center) * old);
+    Glyph(g, size, r, c);
+    rt_->SetTransform(old);
+}
+
+// ---------------------------------------------------------------------------
+// Level meter colour
+
+D2D1_COLOR_F Flyout::MeterColorFor(Settings::MeterColor c) const {
+    switch (c) {
+        case Settings::MeterWhite:
+            return Rgba(0xFFFFFF);
+        case Settings::MeterGreen:
+            return Rgba(0x3CC83C);  // the Windows 7 peak meter green
+        case Settings::MeterCustom:
+            return Rgba(settings_->meterCustomColor);
+        default: {
+            // The accent mixed towards white, so it stands out against the
+            // filled part of the slider.
+            float mix = pal_.dark ? 0.6f : 0.5f;
+            const D2D1_COLOR_F& a = pal_.accent;
+            return D2D1::ColorF(a.r + (1 - a.r) * mix, a.g + (1 - a.g) * mix, a.b + (1 - a.b) * mix, 1.0f);
+        }
+    }
+}
+
+// The custom colour is typed into a real EDIT control laid over the field the
+// settings view draws. Called after each paint.
+void Flyout::UpdateHexEdit() {
+    bool show = visible_ && view_ == View::Settings && hexVisible_ && !transition_.Running() &&
+                hexRect_.top >= 0 && hexRect_.bottom <= contentBottom_;
+    if (!show) {
+        if (hexEdit_ && IsWindowVisible(hexEdit_)) ShowWindow(hexEdit_, SW_HIDE);
+        return;
+    }
+    int fontPx = (int)std::lround(14 * scale_);
+    if (!hexEdit_) {
+        hexEdit_ = CreateWindowExW(0, L"EDIT", nullptr, WS_CHILD | ES_AUTOHSCROLL | ES_UPPERCASE, 0, 0, 10, 10, hwnd_,
+                                   (HMENU)1, GetModuleHandleW(nullptr), nullptr);
+        SendMessageW(hexEdit_, EM_LIMITTEXT, 6, 0);
+        wchar_t text[8];
+        swprintf_s(text, L"%06X", settings_->meterCustomColor & 0xFFFFFF);
+        SetWindowTextW(hexEdit_, text);
+    }
+    static int lastFontPx = 0;
+    if (!hexFont_ || lastFontPx != fontPx) {
+        if (hexFont_) DeleteObject(hexFont_);
+        hexFont_ = CreateFontW(-fontPx, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Variable Text");
+        SendMessageW(hexEdit_, WM_SETFONT, (WPARAM)hexFont_, TRUE);
+        lastFontPx = fontPx;
+    }
+    // Inside the drawn field, after the "#".
+    int x = (int)std::lround((hexRect_.left + 24) * scale_);
+    int h = (int)std::lround(fontPx * 1.4f);
+    int y = (int)std::lround(((hexRect_.top + hexRect_.bottom) / 2) * scale_) - h / 2;
+    int w = (int)std::lround((hexRect_.right - 8) * scale_) - x;
+    SetWindowPos(hexEdit_, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
 void Flyout::DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c) {
@@ -1177,7 +1386,7 @@ void Flyout::DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c) {
     D2D1_MATRIX_3X2_F old;
     rt_->GetTransform(&old);
     D2D1_POINT_2F center = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-    rt_->SetTransform(D2D1::Matrix3x2F::Rotation(GearAngle()) * D2D1::Matrix3x2F::Translation(center.x, center.y) * old);
+    rt_->SetTransform(D2D1::Matrix3x2F::Rotation(gear_.Value()) * D2D1::Matrix3x2F::Translation(center.x, center.y) * old);
     brush_->SetColor(c);
     rt_->DrawGeometry(gearGeo_.Get(), brush_.Get(), 1.0f, roundStroke_.Get());
     rt_->DrawEllipse(D2D1::Ellipse({0, 0}, 1.9f, 1.9f), brush_.Get(), 1.0f);
@@ -1332,16 +1541,42 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ERASEBKGND:
             return 1;
 
+        case WM_COMMAND:  // custom meter colour typed in the hex field
+            if (HIWORD(wp) == EN_CHANGE && (HWND)lp == hexEdit_) {
+                wchar_t text[16] = {};
+                GetWindowTextW(hexEdit_, text, ARRAYSIZE(text));
+                wchar_t* end = nullptr;
+                unsigned long v = wcstoul(text, &end, 16);
+                if (wcslen(text) == 6 && end && *end == 0) {
+                    settings_->meterCustomColor = v;
+                    settings_->Save();
+                    pal_.meter = MeterColorFor((Settings::MeterColor)settings_->meterColor);
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                }
+            }
+            return 0;
+
+        case WM_CTLCOLOREDIT: {
+            HDC dc = (HDC)wp;
+            COLORREF bg = pal_.dark ? RGB(0x2B, 0x2B, 0x2B) : RGB(0xF9, 0xF9, 0xF9);
+            SetTextColor(dc, pal_.dark ? RGB(255, 255, 255) : RGB(0x1A, 0x1A, 0x1A));
+            SetBkColor(dc, bg);
+            if (hexBrush_) DeleteObject(hexBrush_);
+            hexBrush_ = CreateSolidBrush(bg);
+            return (LRESULT)hexBrush_;
+        }
+
         case WM_OUTSIDE_CLICK:
             if (!modal_) Hide();  // menus and the file dialog are outside the flyout too
             return 0;
 
         case WM_TIMER:
             if (wp == kMeterTimer && visible_) {
-                bool gearMoving = false;
-                GearAngle(&gearMoving);
+                if (pending_ && GetTickCount64() >= pendingAt_) SwitchView(pendingView_);
+                bool animating = Animating();
                 bool peaks = view_ == View::Mixer && audio_->UpdatePeaks();
-                if (gearMoving || peaks) InvalidateRect(hwnd_, nullptr, FALSE);
+                if (animating || peaks) InvalidateRect(hwnd_, nullptr, FALSE);
+                if (!animating && view_ == View::Settings) UpdateHexEdit();  // show it once the transition ends
             }
             return 0;
 
@@ -1370,9 +1605,6 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             Hit h = HitTest(x, y);
             if (!(h == hover_)) {
                 hover_ = h;
-                bool hot = h.kind == HitKind::Gear;
-                if (hot != gearHot_) AnimateGear(hot ? 60.0f : 0.0f, 300);
-                gearHot_ = hot;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;
@@ -1381,8 +1613,6 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             tracking_ = false;
             if (!dragging_) {
                 hover_ = Hit{};
-                if (gearHot_) AnimateGear(0, 300);
-                gearHot_ = false;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;
@@ -1391,7 +1621,6 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             float x = GET_X_LPARAM(lp) / scale_, y = GET_Y_LPARAM(lp) / scale_;
             SetCapture(hwnd_);
             pressed_ = HitTest(x, y);
-            if (pressed_.kind == HitKind::Gear) AnimateGear(150, 250);  // keeps turning while pressed
             if (pressed_.kind == HitKind::Slider) {
                 dragging_ = true;
                 SetSliderValue(pressed_, x);
@@ -1434,7 +1663,7 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         case WM_KEYDOWN:
             if (wp == VK_ESCAPE) {
                 if (view_ == View::Settings)
-                    Activate(Hit{HitKind::Back});
+                    GoToView(View::Mixer);
                 else
                     Hide();
             }

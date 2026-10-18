@@ -6,6 +6,10 @@
 // The explorer TAP dll, extracted at runtime (see src/tapclient.cpp).
 2 RCDATA "../obj/VolumeOneTap.dll"
 
+// UI languages (see lang/README.md). The name is the language code.
+EN LANG "../lang/en.lang"
+ES LANG "../lang/es.lang"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,0
  PRODUCTVERSION VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,0

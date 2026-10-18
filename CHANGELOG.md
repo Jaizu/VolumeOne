@@ -8,12 +8,20 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 - **Use the Windows volume icon** (Settings): instead of a separate tray icon, the original volume icon in the taskbar opens VolumeOne. Left-click opens the mixer, right-click the menu, middle-click mutes and the mouse wheel changes the volume. Hovering it highlights the whole Quick Settings button, like the network icon.
 - **Remove volume from Quick Settings** (Settings): hides the volume slider in the Windows Quick Settings panel while VolumeOne is running. On laptops the brightness slider stays.
 
+- **Close and restore Windows** (Settings): for when you stop using VolumeOne. It closes the app, brings back the Windows volume icon and the Quick Settings slider, removes the startup entry, deletes its settings and data, and restarts the taskbar so nothing of it is left loaded.
+- **Level meter colour** (Settings): accent, white, green (like Windows 7) or a custom hex colour.
+- **Translations**: the texts live in `lang/*.lang` files, one per language, so they're easy to translate. English and Spanish for now, picked from the Windows display language. See `lang/README.md` to add one.
+- **Location warning**: if VolumeOne runs from Downloads, the Desktop or a temp folder, a yellow banner offers to move it to `Documents\VolumeOne` (and updates "Start with Windows"). Works with any Windows language and with redirected folders.
+
 ### Changed
+- When explorer (or Quick Settings) still has an older VolumeOne helper loaded, for example after an update, VolumeOne restarts it automatically so the new one is used. explorer is restarted through the Windows Restart Manager, which reopens File Explorer windows.
+- The Output devices and Input devices sections in Settings start collapsed.
+- The gear only turns when clicked; the view then slides in, and the back arrow turns from left to down when going back.
 - The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
 - The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place.
 - In Settings, the footer has a back arrow (in the gear's place) instead of the Exit button.
 - VolumeOne can no longer be closed from its own UI: Exit is gone from the right-click menu too.
-- The settings gear is drawn like the Quick Settings one (six pointed teeth, small hole) and turns when hovered and pressed.
+- The settings gear is drawn like the Quick Settings one (six pointed teeth, small hole).
 - Changing the volume with the mouse wheel over the taskbar icon (or muting with a middle-click) shows a small pill above the taskbar with the device, a bar and the percentage.
 
 ### Fixed

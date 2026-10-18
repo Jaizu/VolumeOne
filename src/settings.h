@@ -9,6 +9,9 @@ struct Settings {
     bool hideSystemVolumeIcon = false;
     bool useSystemVolumeIcon = false;  // open VolumeOne from the Windows icon, no own tray icon
     bool hideQuickSettingsVolume = false;  // hide the volume slider in Windows' Quick Settings
+    enum MeterColor : DWORD { MeterAccent, MeterWhite, MeterGreen, MeterCustom };
+    DWORD meterColor = MeterAccent;
+    DWORD meterCustomColor = 0xFF8C00;  // 0xRRGGBB, used with MeterCustom
     std::vector<std::wstring> hiddenDevices;  // endpoint ids (outputs and inputs)
     // Per-device icon: "speakers", "headphones" or the path of a custom icon
     // copied into AppDataDir("icons"). Missing = automatic (from form factor).
@@ -25,4 +28,5 @@ struct Settings {
 std::wstring AppDataDir(const wchar_t* sub = nullptr);
 
 bool GetStartWithWindows();
-void SetStartWithWindows(bool enable);
+// exePath: the exe to start (default: this one).
+void SetStartWithWindows(bool enable, const wchar_t* exePath = nullptr);

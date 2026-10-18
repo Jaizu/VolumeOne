@@ -18,6 +18,12 @@ void Settings::Load() {
     size = sizeof(value);
     if (RegQueryValueExW(key, REG_HIDE_QS_VOLUME, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
         hideQuickSettingsVolume = value != 0;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, L"MeterColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS && value <= MeterCustom)
+        meterColor = value;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, L"MeterCustomColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        meterCustomColor = value & 0xFFFFFF;
 
     hiddenDevices.clear();
     size = 0;
@@ -54,6 +60,8 @@ void Settings::Save() const {
     RegSetValueExW(key, REG_USE_SYSTEM_ICON, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
     value = hideQuickSettingsVolume ? 1 : 0;
     RegSetValueExW(key, REG_HIDE_QS_VOLUME, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
+    RegSetValueExW(key, L"MeterColor", 0, REG_DWORD, (const BYTE*)&meterColor, sizeof(meterColor));
+    RegSetValueExW(key, L"MeterCustomColor", 0, REG_DWORD, (const BYTE*)&meterCustomColor, sizeof(meterCustomColor));
 
     std::wstring multi;
     for (const auto& id : hiddenDevices) {
@@ -102,10 +110,13 @@ std::wstring AppDataDir(const wchar_t* sub) {
     return dir;
 }
 
-static std::wstring RunCommand() {
+static std::wstring RunCommand(const wchar_t* exe = nullptr) {
     wchar_t path[MAX_PATH];
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-    return L"\"" + std::wstring(path) + L"\" /background";
+    if (!exe) {
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        exe = path;
+    }
+    return L"\"" + std::wstring(exe) + L"\" /background";
 }
 
 bool GetStartWithWindows() {
@@ -116,12 +127,12 @@ bool GetStartWithWindows() {
     return _wcsicmp(buf, RunCommand().c_str()) == 0;
 }
 
-void SetStartWithWindows(bool enable) {
+void SetStartWithWindows(bool enable, const wchar_t* exePath) {
     HKEY key;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS)
         return;
     if (enable) {
-        std::wstring cmd = RunCommand();
+        std::wstring cmd = RunCommand(exePath);
         RegSetValueExW(key, APP_NAME, 0, REG_SZ, (const BYTE*)cmd.c_str(), (DWORD)((cmd.size() + 1) * sizeof(wchar_t)));
     } else {
         RegDeleteValueW(key, APP_NAME);

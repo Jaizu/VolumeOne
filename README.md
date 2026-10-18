@@ -18,6 +18,8 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Start with Windows** (toggle)
 - **Built-in updater**: checks GitHub releases at startup and once a day, and updates itself in place
 - Click a speaker or app icon to mute it. Scroll over a row to change its volume. Middle-click the tray icon to mute the default device
+- **Close and restore Windows** from Settings if you stop using it: everything VolumeOne changed goes back
+- English and Spanish, following the Windows language. Translations are plain text files in [`lang/`](lang/README.md)
 - A single `.exe`, no installer
 
 ## Installation
@@ -31,7 +33,7 @@ SmartScreen may warn you the first time because the exe is not signed: **More in
 ## Usage
 
 - **Left-click** the tray icon: open the mixer
-- **Right-click**: pick the default audio input, open settings, Windows sound settings, exit
+- **Right-click**: pick the default output and input, open settings, Windows sound settings
 
 ## Building
 

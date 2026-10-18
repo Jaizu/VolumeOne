@@ -52,7 +52,6 @@ std::atomic<bool> g_intercept{false};  // keep it, but send its clicks to Volume
 std::atomic<bool> g_hideQs{false};     // hide the Quick Settings volume slider
 winrt::com_ptr<IXamlDiagnostics> g_diag;
 HANDLE g_refreshEvent = nullptr;
-HANDLE g_loadedEvent = nullptr;
 
 #ifdef TAP_LOG
 void Log(const wchar_t* fmt, ...) {
@@ -520,8 +519,6 @@ struct Tap : winrt::implements<Tap, IObjectWithSite> {
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                            reinterpret_cast<LPCWSTR>(&ReadState), &self);
 
-        std::wstring loadedName = TAP_LOADED_PREFIX + std::to_wstring(GetCurrentProcessId());
-        g_loadedEvent = CreateEventW(nullptr, TRUE, FALSE, loadedName.c_str());
         std::wstring refreshName = TAP_REFRESH_PREFIX + std::to_wstring(GetCurrentProcessId());
         g_refreshEvent = CreateEventW(nullptr, FALSE, FALSE, refreshName.c_str());
         ReadState();

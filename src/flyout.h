@@ -30,11 +30,33 @@ struct UpdateState {
     std::wstring notes;    // release notes, plain text
 };
 
+// A value eased from one number to another over time (ease-out cubic).
+struct Anim {
+    float from = 0, to = 0, ms = 1;
+    ULONGLONG start = 0;
+    float Progress() const { return std::min(1.0f, (GetTickCount64() - start) / ms); }
+    bool Running() const { return Progress() < 1.0f; }
+    float Value() const {
+        float t = Progress();
+        return from + (to - from) * (1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t));
+    }
+    void Go(float target, float duration) {
+        from = Value();
+        to = target;
+        ms = duration;
+        start = GetTickCount64();
+    }
+    void Set(float v) { from = to = v; start = 0; }
+};
+
 class Flyout {
 public:
     std::function<void()> onHideIconChanged;   // also called when "use the Windows icon" changes
     std::function<void()> onCheckUpdates;
     std::function<void()> onInstallUpdate;
+    std::function<void()> onCloseAndRestore;
+    std::function<void()> onMoveToDocuments;
+    std::wstring locationName;  // folder the exe is in, if it's a risky one (Downloads...); shows a warning
 
     bool Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings, const UpdateState* update);
     void Toggle();
@@ -57,7 +79,8 @@ private:
     enum class View { Mixer, Settings };
     enum class HitKind {
         None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
-        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate
+        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, SectionOutputs, SectionInputs, MeterOption,
+        CloseRestore, MoveToDocuments
     };
     struct Hit {
         HitKind kind = HitKind::None;
@@ -74,10 +97,15 @@ private:
     void RenderOsd();
 
     // Settings gear drawn as a path (the Quick Settings one isn't the font
-    // glyph) that turns on hover and press.
+    // glyph). It turns when clicked, then the view changes with a short
+    // transition; the back arrow turns from left to down the same way.
     void DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c);
-    void AnimateGear(float toDegrees, float ms);
-    float GearAngle(bool* animating = nullptr) const;
+    void DrawRotatedGlyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float degrees);
+    void GoToView(View v);   // animates the footer icon, then switches
+    void SwitchView(View v);
+    bool Animating() const;
+    D2D1_COLOR_F MeterColorFor(Settings::MeterColor c) const;
+    void UpdateHexEdit();
     LRESULT WndProc(UINT, WPARAM, LPARAM);
 
     void ApplyWindowStyle();
@@ -148,9 +176,19 @@ private:
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<ID2D1PathGeometry> gearGeo_;
     ComPtr<ID2D1StrokeStyle> roundStroke_;
-    float gearFrom_ = 0, gearTo_ = 0, gearMs_ = 1;
-    ULONGLONG gearStart_ = 0;
-    bool gearHot_ = false;
+    Anim gear_, arrow_;    // footer icon rotation, degrees
+    Anim transition_;      // 0..1 entrance of the current view
+    int transitionDir_ = 1;
+    bool pending_ = false;  // a view switch waiting for the icon animation
+    View pendingView_ = View::Mixer;
+    ULONGLONG pendingAt_ = 0;
+
+    bool outputsExpanded_ = false, inputsExpanded_ = false;  // Settings sections
+    HWND hexEdit_ = nullptr;  // custom meter colour field (a real EDIT control)
+    HFONT hexFont_ = nullptr;
+    HBRUSH hexBrush_ = nullptr;
+    D2D1_RECT_F hexRect_{};
+    bool hexVisible_ = false;
 
     HWND osd_ = nullptr;
     ComPtr<ID2D1HwndRenderTarget> osdRt_;

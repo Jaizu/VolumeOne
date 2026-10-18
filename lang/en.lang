@@ -1,0 +1,58 @@
+# VolumeOne strings: English. This is the reference file; any key missing
+# from another language falls back to the text here.
+#
+# Format: key = text. {0} is replaced by a value (a version, a folder name),
+# \n is a line break. Lines starting with # are comments. Save as UTF-8.
+
+settings = Settings
+back = Back
+useSystemIcon = Use the Windows volume icon
+useSystemIconDesc = Clicking the original taskbar icon opens VolumeOne, with no separate tray icon
+hideQsVolume = Remove volume from Quick Settings
+hideQsVolumeDesc = Hides the volume control in the Windows Quick Settings panel while VolumeOne is running
+hideSystemIcon = Hide the Windows volume icon
+hideSystemIconDesc = Removes the volume icon from the taskbar while VolumeOne is running
+startWithWindows = Start with Windows
+startWithWindowsDesc = Opens in the background when you sign in
+meterColor = Level meter colour
+meterColorDesc = The band that shows the audio level on the sliders
+meterAccent = Accent
+meterWhite = White
+meterGreen = Green
+meterCustom = Custom
+outputDevices = Output devices
+outputDevicesDesc = Turn off the ones you don't want to see in the mixer or the right-click menu. Click the icon to change it
+inputDevices = Input devices
+inputDevicesDesc = Turn off the ones you don't want to see in the right-click menu
+noDevices = No visible output devices
+systemSounds = System sounds
+soundSettings = Sound settings
+openMixer = Open mixer
+windowsMixer = Windows volume mixer
+muted = Muted
+audioOutput = Audio output
+audioInput = Audio input
+noInputs = No audio inputs
+iconAuto = Automatic
+iconSpeakers = Speakers
+iconHeadphones = Headphones
+iconCustom = Custom icon…
+iconFiles = Icons and images
+updates = Updates
+checkUpdates = Check for updates
+checking = Checking…
+upToDate = You're up to date
+checkFailed = Couldn't check
+updateAvailable = Version {0} available
+updateNow = Update
+updating = Updating…
+updateFailed = Update failed
+whatsNew = What's new in {0}
+closeAndRestore = Close and restore Windows
+closeAndRestoreDesc = Closes VolumeOne and puts Windows back as it was: volume icon, Quick Settings and startup
+closeAndRestoreButton = Close
+closeConfirmTitle = Close VolumeOne
+closeConfirm = Close VolumeOne and restore the Windows volume controls?\n\nIt will stop starting with Windows and its settings will be deleted. The taskbar restarts for a moment.
+locationWarning = VolumeOne is in {0}. If that folder gets cleaned up, it will be deleted.
+moveToDocuments = Move to Documents
+moveFailed = Couldn't move it

@@ -15,9 +15,6 @@ static const CLSID CLSID_VolumeOneTap = {0x6e1f3a57, 0x2c4b, 0x4e0d, {0x9b, 0x8a
 // "<prefix><pid>" for each process the dll is in (explorer, ShellHost),
 // signalled by VolumeOne.exe when a setting changes or the app exits.
 #define TAP_REFRESH_PREFIX L"Local\\VolumeOne.TapRefresh."
-// Created by the dll as "<prefix><pid>" so we don't inject twice.
-#define TAP_LOADED_PREFIX L"Local\\VolumeOne.TapLoaded."
-#define TAP_DLL_NAME L"VolumeOneTap.dll"
 
 #define REG_KEY_PATH L"Software\\VolumeOne"
 #define REG_HIDE_ICON L"HideSystemVolumeIcon"

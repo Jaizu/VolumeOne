@@ -33,10 +33,10 @@ cl %CFLAGS% /LD src\tap\tap.cpp /Fe:obj\VolumeOneTap.dll /link %LFLAGS% /DEF:src
 
 rc /nologo /fo obj\app.res res\app.rc || exit /b 1
 
-cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp obj\app.res ^
+cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp src\strings.cpp obj\app.res ^
    /Fe:"%OUT%\VolumeOne.exe" /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
    user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ^
-   windowscodecs.lib version.lib shcore.lib propsys.lib winhttp.lib bcrypt.lib || exit /b 1
+   windowscodecs.lib version.lib shcore.lib propsys.lib winhttp.lib bcrypt.lib rstrtmgr.lib || exit /b 1
 
 echo.
 echo Built %OUT%\VolumeOne.exe
