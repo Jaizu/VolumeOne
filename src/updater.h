@@ -14,6 +14,7 @@ struct ReleaseInfo {
     std::wstring exeUrl;
     std::wstring sha256;   // hex, from the asset's "digest"; may be empty
     std::wstring pageUrl;
+    std::wstring notes;    // release notes as plain text (Markdown stripped)
 };
 
 // Blocking; call from a worker thread. False on network/parse errors.

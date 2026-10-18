@@ -17,8 +17,11 @@ goto build
 echo MSVC not found. Install "Desktop development with C++" or the VS Build Tools.
 exit /b 1
 
+rem Optional first argument: output folder (default: bin).
 :build
-if not exist bin mkdir bin
+set "OUT=%~1"
+if "%OUT%"=="" set "OUT=bin"
+if not exist "%OUT%" mkdir "%OUT%"
 if not exist obj mkdir obj
 
 set CFLAGS=/nologo /std:c++20 /O2 /GL /Gy /MT /EHsc /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE /DNDEBUG /Fo:obj\
@@ -31,9 +34,9 @@ cl %CFLAGS% /LD src\tap\tap.cpp /Fe:obj\VolumeOneTap.dll /link %LFLAGS% /DEF:src
 rc /nologo /fo obj\app.res res\app.rc || exit /b 1
 
 cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp obj\app.res ^
-   /Fe:bin\VolumeOne.exe /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
+   /Fe:"%OUT%\VolumeOne.exe" /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
    user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ^
    windowscodecs.lib version.lib shcore.lib propsys.lib winhttp.lib bcrypt.lib || exit /b 1
 
 echo.
-echo Built bin\VolumeOne.exe
+echo Built %OUT%\VolumeOne.exe

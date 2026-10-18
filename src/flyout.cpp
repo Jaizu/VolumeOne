@@ -8,6 +8,7 @@
 
 static const float kWidth = 360.0f;
 static const float kFooterHeight = 52.0f;
+static const UINT_PTR kMeterTimer = 1;
 static const wchar_t kTextFont[] = L"Segoe UI Variable Text";
 static const wchar_t kIconFont[] = L"Segoe Fluent Icons";
 
@@ -27,6 +28,7 @@ enum : wchar_t {
     kGlyphChevronUp = 0xE70E,
     kGlyphMicrophone = 0xE720,
     kGlyphDownload = 0xE896,
+    kGlyphVolumeBars = 0xEBC5,
 };
 
 static D2D1_COLOR_F Rgba(UINT rgb, float a = 1.0f) {
@@ -111,6 +113,8 @@ void Flyout::LoadPalette() {
         p.onAccent = Rgba(0x000000);
         p.toggleOffFill = Rgba(0x000000, 0.10f);
         p.tint = Rgba(0x202020, 0.82f);
+        p.textDisabled = Rgba(0xFFFFFF, 0.3f);
+        p.meter = Rgba(0xFFFFFF, 0.55f);
     } else {
         p.text = Rgba(0x000000, 0.894f);
         p.textSecondary = Rgba(0x000000, 0.606f);
@@ -127,6 +131,8 @@ void Flyout::LoadPalette() {
         p.onAccent = Rgba(0xFFFFFF);
         p.toggleOffFill = Rgba(0x000000, 0.0241f);
         p.tint = Rgba(0xF3F3F3, 0.82f);
+        p.textDisabled = Rgba(0x000000, 0.25f);
+        p.meter = Rgba(0xFFFFFF, 0.55f);
     }
     pal_ = p;
 }
@@ -222,6 +228,7 @@ void Flyout::Show(bool settingsView) {
                  SWP_NOSIZE | SWP_NOACTIVATE);
 
     visible_ = true;
+    SetTimer(hwnd_, kMeterTimer, 33, nullptr);
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
     UpdateWindow(hwnd_);
@@ -248,6 +255,7 @@ void Flyout::Show(bool settingsView) {
 void Flyout::Hide() {
     if (!visible_) return;
     visible_ = false;
+    KillTimer(hwnd_, kMeterTimer);
     dragging_ = false;
     lastHideTick_ = GetTickCount64();
     ShowWindow(hwnd_, SW_HIDE);
@@ -393,12 +401,19 @@ void Flyout::Glyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR
     rt_->DrawText(&g, 1, fmt.Get(), r, brush_.Get());
 }
 
+// The level glyph over the full set of bars drawn dim, like the Windows
+// volume icon, so the inactive bars still show.
+void Flyout::VolumeIcon(float volume, bool muted, const D2D1_RECT_F& r) {
+    if (!muted) Glyph(kGlyphVolumeBars, 16, r, pal_.textDisabled);
+    Glyph(VolumeGlyph(volume, muted), 16, r, pal_.text);
+}
+
 void Flyout::Button(const Hit& h, bool draw, float radius) {
     hits_.push_back(h);
     if (draw && hover_ == h) Fill(h.rect, pressed_ == h ? pal_.subtlePressed : pal_.subtleHover, radius);
 }
 
-void Flyout::Slider(const Hit& h, float cy, float value, bool muted, bool draw) {
+void Flyout::Slider(const Hit& h, float cy, float value, bool muted, float peak, bool draw) {
     hits_.push_back(h);
     if (!draw) return;
     float x0 = h.trackX0, x1 = h.trackX1;
@@ -407,6 +422,9 @@ void Flyout::Slider(const Hit& h, float cy, float value, bool muted, bool draw) 
 
     Fill({x0, cy - 2, x1, cy + 2}, pal_.trackOff, 2);
     if (tx > x0 + 1) Fill({x0, cy - 2, tx, cy + 2}, fill, 2);
+    // Level meter: a lighter band over the filled part, like EarTrumpet.
+    float px = x0 + std::clamp(peak, 0.0f, 1.0f) * (x1 - x0);
+    if (px > x0 + 1) Fill({x0, cy - 2, std::min(px, tx), cy + 2}, pal_.meter, 2);
 
     // Thumb: neutral outer disc with an accent dot that grows on hover and
     // shrinks while pressed, like the WinUI slider.
@@ -589,6 +607,9 @@ float Flyout::LayoutMixer(float y, bool draw) {
         float bw = TextWidth(label, fBody_.Get()) + 28;
         Hit btn{HitKind::InstallUpdate, -1, -1, {x1 - 10 - bw, y + 10, x1 - 10, y + 42}};
         if (!installing) hits_.push_back(btn);
+        // The rest of the banner opens Settings, which lists what's new.
+        Hit details{HitKind::Gear, -1, -1, {x0, y, btn.rect.left - 4, y + h}};
+        hits_.push_back(details);
         if (draw) {
             Fill({x0, y, x1, y + h}, pal_.card, 8);
             Stroke({x0, y, x1, y + h}, pal_.cardStroke, 8);
@@ -644,9 +665,9 @@ float Flyout::LayoutMixer(float y, bool draw) {
         // Device master volume.
         Hit mute{HitKind::Mute, di, -1, {x0 + 6, cy, x0 + 46, cy + 40}};
         Button(mute, draw);
-        if (draw) Glyph(VolumeGlyph(d.volume, d.muted), 16, mute.rect, pal_.text);
+        if (draw) VolumeIcon(d.volume, d.muted, mute.rect);
         Hit slider{HitKind::Slider, di, -1, {x0 + 50, cy, x1 - 48, cy + 40}, x0 + 62, x1 - 60};
-        Slider(slider, cy + 20, d.volume, d.muted, draw);
+        Slider(slider, cy + 20, d.volume, d.muted, d.peak, draw);
         if (draw) Text(Percent(d.volume), fBody_.Get(), {x1 - 52, cy, x1 - 14, cy + 40}, pal_.text, DWRITE_TEXT_ALIGNMENT_TRAILING);
         cy += 40;
 
@@ -664,7 +685,7 @@ float Flyout::LayoutMixer(float y, bool draw) {
                     Text(a.name, fCaption_.Get(), {x0 + 54, cy + 2, x1 - 14, cy + 20}, pal_.textSecondary);
                 }
                 Hit aslider{HitKind::Slider, di, ai, {x0 + 50, cy + 16, x1 - 48, cy + 48}, x0 + 62, x1 - 60};
-                Slider(aslider, cy + 32, a.volume, a.muted, draw);
+                Slider(aslider, cy + 32, a.volume, a.muted, a.peak, draw);
                 if (draw) Text(Percent(a.volume), fBody_.Get(), {x1 - 52, cy + 16, x1 - 14, cy + 48}, pal_.text, DWRITE_TEXT_ALIGNMENT_TRAILING);
                 cy += 48;
             }
@@ -805,6 +826,19 @@ float Flyout::LayoutSettings(float y, bool draw) {
             Text(button, fBody_.Get(), btn.rect, accent ? pal_.onAccent : pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
         }
         y += h + 12;
+
+        bool hasUpdate = update_ && (update_->status == UpdateState::Available ||
+                                     update_->status == UpdateState::InstallFailed ||
+                                     update_->status == UpdateState::Installing);
+        if (hasUpdate && !update_->notes.empty()) {
+            std::wstring title = std::wstring(S().whatsNew) + update_->version;
+            float nh = TextHeight(update_->notes, fDesc_.Get(), x1 - x0 - 32);
+            if (draw) Text(title, fTitle_.Get(), {x0 + 4, y, x1, y + 20}, pal_.text);
+            y += 26;
+            card(y, nh + 24);
+            if (draw) Text(update_->notes, fDesc_.Get(), {x0 + 16, y + 12, x1 - 16, y + 12 + nh}, pal_.textSecondary);
+            y += nh + 24 + 12;
+        }
     }
     return y;
 }
@@ -1055,6 +1089,11 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_TIMER:
+            if (wp == kMeterTimer && visible_ && view_ == View::Mixer && audio_->UpdatePeaks())
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
 
         case WM_SIZE:
             if (rt_) rt_->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));

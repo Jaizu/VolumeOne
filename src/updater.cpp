@@ -60,6 +60,24 @@ static bool HttpGet(const std::wstring& url, std::string& body) {
     return ok;
 }
 
+static void AppendUtf8(std::string& out, unsigned cp) {
+    if (cp < 0x80) {
+        out.push_back((char)cp);
+    } else if (cp < 0x800) {
+        out.push_back((char)(0xC0 | (cp >> 6)));
+        out.push_back((char)(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        out.push_back((char)(0xE0 | (cp >> 12)));
+        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back((char)(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back((char)(0xF0 | (cp >> 18)));
+        out.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back((char)(0x80 | (cp & 0x3F)));
+    }
+}
+
 // Minimal JSON string lookup: finds "key" at or after `from` and returns its
 // string value (handles \" and \\ escapes; others are copied as-is).
 static bool JsonString(const std::string& json, const char* key, size_t from, std::string& value, size_t* at = nullptr) {
@@ -76,10 +94,69 @@ static bool JsonString(const std::string& json, const char* key, size_t from, st
     p++;
     value.clear();
     for (; p < json.size() && json[p] != '"'; p++) {
-        if (json[p] == '\\' && p + 1 < json.size()) p++;
-        value.push_back(json[p]);
+        if (json[p] != '\\' || p + 1 >= json.size()) {
+            value.push_back(json[p]);
+            continue;
+        }
+        char e = json[++p];
+        switch (e) {
+            case 'n': value.push_back('\n'); break;
+            case 't': value.push_back('\t'); break;
+            case 'r': case 'b': case 'f': break;
+            case 'u':
+                if (p + 4 < json.size()) {
+                    unsigned cp = strtoul(json.substr(p + 1, 4).c_str(), nullptr, 16);
+                    p += 4;
+                    if (cp >= 0xD800 && cp < 0xDC00 && p + 6 < json.size() && json[p + 1] == '\\' && json[p + 2] == 'u') {
+                        unsigned lo = strtoul(json.substr(p + 3, 4).c_str(), nullptr, 16);
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        p += 6;
+                    }
+                    AppendUtf8(value, cp);
+                }
+                break;
+            default: value.push_back(e); break;  // \" \\ \/
+        }
     }
     return true;
+}
+
+// Release notes are Markdown; the flyout shows plain text.
+static std::wstring StripMarkdown(const std::wstring& md) {
+    std::wstring out;
+    bool lastBlank = true;  // also drops leading blank lines
+    size_t start = 0;
+    while (start <= md.size()) {
+        size_t end = md.find(L'\n', start);
+        if (end == std::wstring::npos) end = md.size();
+        std::wstring t = md.substr(start, end - start);
+        start = end + 1;
+
+        size_t i = t.find_first_not_of(L" \t#");
+        t = i == std::wstring::npos ? L"" : t.substr(i);
+        if (t.rfind(L"- ", 0) == 0 || t.rfind(L"* ", 0) == 0) t = L"• " + t.substr(2);
+        std::wstring clean;
+        for (size_t k = 0; k < t.size(); k++) {
+            if (t[k] == L'*' || t[k] == L'`') continue;
+            if (t[k] == L'[') {  // [text](url) -> text
+                size_t close = t.find(L"](", k);
+                size_t stop = close == std::wstring::npos ? close : t.find(L')', close);
+                if (stop != std::wstring::npos) {
+                    clean += t.substr(k + 1, close - k - 1);
+                    k = stop;
+                    continue;
+                }
+            }
+            clean.push_back(t[k]);
+        }
+        // Keep at most one blank line in a row.
+        bool blank = clean.empty();
+        if (!blank || !lastBlank) out += clean + L"\n";
+        lastBlank = blank;
+    }
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L' ')) out.pop_back();
+    while (!out.empty() && out.front() == L'\n') out.erase(0, 1);
+    return out;
 }
 
 static std::wstring Widen(const std::string& s) {
@@ -98,6 +175,8 @@ bool FetchLatest(ReleaseInfo& out) {
     if (!JsonString(json, "tag_name", 0, tag)) return false;
     if (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) tag.erase(0, 1);
     JsonString(json, "html_url", 0, page);
+    std::string body;
+    if (JsonString(json, "body", 0, body)) out.notes = StripMarkdown(Widen(body));
 
     // Asset objects list "name" before "digest" and "browser_download_url".
     std::string name;

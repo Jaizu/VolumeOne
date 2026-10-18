@@ -38,7 +38,6 @@ namespace {
 struct Tracked {
     winrt::weak_ref<wux::Controls::TextBlock> textBlock;
     CoreDispatcher dispatcher{nullptr};
-    bool hidden = false;
 };
 
 std::mutex g_lock;
@@ -93,6 +92,40 @@ bool IsVolumeGlyph(const winrt::hstring& text) {
     return false;
 }
 
+// True if any text block inside the icon shows a volume glyph. One icon has
+// several (Underlay with the dim bars, Base with the level, AccentOverlay),
+// and when muted Base shows the mute glyph while Underlay goes empty, so the
+// decision has to be made for the whole icon, not per text block.
+bool ContentIsVolume(const wux::DependencyObject& node, int depth = 0) {
+    if (auto tb = node.try_as<wux::Controls::TextBlock>())
+        if (IsVolumeGlyph(tb.Text())) return true;
+    if (depth > 6) return false;
+    int n = wux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < n; i++)
+        if (ContentIsVolume(wux::Media::VisualTreeHelper::GetChild(node, i), depth + 1)) return true;
+    return false;
+}
+
+// Icons we collapsed, so turning the option off only undoes our own changes.
+// UI thread only.
+std::vector<winrt::weak_ref<wux::FrameworkElement>> g_hiddenContents;
+
+bool IsHiddenByUs(const wux::FrameworkElement& content, bool remove) {
+    for (auto it = g_hiddenContents.begin(); it != g_hiddenContents.end();) {
+        auto e = it->get();
+        if (!e) {
+            it = g_hiddenContents.erase(it);
+            continue;
+        }
+        if (e == content) {
+            if (remove) g_hiddenContents.erase(it);
+            return true;
+        }
+        ++it;
+    }
+    return false;
+}
+
 // UI thread. TextBlock "InnerTextBlock" -> ... -> SystemTray.TextIconContent
 // -> ... -> SystemTray.IconView -> ... -> "ControlCenterButton".
 void Evaluate(Tracked& t) {
@@ -109,7 +142,6 @@ void Evaluate(Tracked& t) {
         auto fe = node.try_as<wux::FrameworkElement>();
         if (!fe) continue;
         auto cls = winrt::get_class_name(fe);
-        LOG(L"  parent %d: %s name=%s", i, cls.c_str(), fe.Name().c_str());
         if (!content && cls == L"SystemTray.TextIconContent")
             content = fe;
         else if (!iconView && cls == L"SystemTray.IconView")
@@ -120,20 +152,21 @@ void Evaluate(Tracked& t) {
         }
     }
     if (!inControlCenter || !content) return;
-    LOG(L"control center icon, glyph %04X, hide=%d", tb.Text().empty() ? 0 : tb.Text()[0], (bool)g_hide);
 
-    LOG(L"eval inCC=%d content=%d text=%04X", inControlCenter, (bool)content, tb.Text().empty() ? 0 : tb.Text()[0]);
-    bool hide = g_hide && IsVolumeGlyph(tb.Text());
-    if (hide) {
-        // Check the real state, not just our flag: something else (e.g. a
+    bool isVolume = ContentIsVolume(content);
+    LOG(L"control center icon, glyph %04X, volume=%d hide=%d", tb.Text().empty() ? 0 : tb.Text()[0], isVolume,
+        (bool)g_hide);
+    // Once an icon is known to be the volume one it stays hidden, even if its
+    // glyphs are briefly all empty while Windows switches them.
+    if (g_hide && (isVolume || IsHiddenByUs(content, false))) {
+        // Check the real state, not just a flag: something else (e.g. a
         // Windhawk mod unloading) may have made it visible again.
         if (content.Visibility() != wux::Visibility::Collapsed) content.Visibility(wux::Visibility::Collapsed);
         if (iconView && iconView.IsEnabled()) iconView.IsEnabled(false);
-        t.hidden = true;
-    } else if (t.hidden) {  // only undo what we did
+        if (!IsHiddenByUs(content, false)) g_hiddenContents.push_back(winrt::make_weak(content));
+    } else if (IsHiddenByUs(content, true)) {
         content.Visibility(wux::Visibility::Visible);
         if (iconView) iconView.IsEnabled(true);
-        t.hidden = false;
     }
 }
 
@@ -186,6 +219,10 @@ struct TreeWatcher : winrt::implements<TreeWatcher, IVisualTreeServiceCallback2>
     HRESULT STDMETHODCALLTYPE OnVisualTreeChange(ParentChildRelation, VisualElement element,
                                                  VisualMutationType mutation) override {
         try {
+#ifdef TAP_LOG_ALL
+            LOG(L"TREE %s type=%s name=%s", mutation == Add ? L"add" : L"remove", element.Type ? element.Type : L"?",
+                element.Name ? element.Name : L"");
+#endif
             if (mutation != Add || !element.Name || wcscmp(element.Name, L"InnerTextBlock") != 0) return S_OK;
             LOG(L"InnerTextBlock added, type=%s", element.Type ? element.Type : L"?");
             winrt::Windows::Foundation::IInspectable obj;

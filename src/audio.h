@@ -15,7 +15,9 @@ struct AppEntry {
     bool isSystem = false;
     float volume = 1.0f;
     bool muted = false;
+    float peak = 0.0f;  // smoothed level meter, 0..1
     std::vector<ComPtr<ISimpleAudioVolume>> volumes;
+    std::vector<ComPtr<IAudioMeterInformation>> meters;
     std::vector<ComPtr<IAudioSessionControl>> controls;
 };
 
@@ -30,7 +32,9 @@ struct AudioDevice {
     float volume = 0.0f;
     bool muted = false;
     ComPtr<IMMDevice> device;
+    float peak = 0.0f;  // smoothed level meter, 0..1
     ComPtr<IAudioEndpointVolume> endpoint;
+    ComPtr<IAudioMeterInformation> meter;
     ComPtr<IAudioSessionManager2> sessionManager;
     std::vector<AppEntry> apps;
 };
@@ -52,6 +56,9 @@ public:
     void RefreshDevices();
     // Re-reads volume/mute values of everything we track. Cheap.
     void RefreshVolumes();
+    // Reads the level meters (called ~30 times a second while the flyout is
+    // open). Returns true if anything visible changed.
+    bool UpdatePeaks();
     // Session tracking is only enabled while the flyout is open.
     void SetTrackSessions(bool track);
     void RefreshSessions();

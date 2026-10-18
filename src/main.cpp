@@ -19,7 +19,7 @@ const UINT_PTR kTimerUpdateCheck = 3;
 const UINT kFirstUpdateCheckMs = 15 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
-enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdExit, IdInputFirst = 100 };
+enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdExit, IdInputFirst = 100, IdOutputFirst = 200 };
 
 HINSTANCE g_inst;
 HWND g_host;
@@ -96,8 +96,14 @@ HICON MakeGlyphIcon(wchar_t glyph, bool light) {
                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe Fluent Icons");
     HGDIOBJ oldFont = SelectObject(dc, font);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
     RECT rc = {0, 0, size, size};
+    if (glyph != 0xE74F) {
+        // All the bars at 40%, under the level glyph, like the Windows icon.
+        const wchar_t bars = 0xEBC5;
+        SetTextColor(dc, RGB(102, 102, 102));
+        DrawTextW(dc, &bars, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    SetTextColor(dc, RGB(255, 255, 255));
     DrawTextW(dc, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiFlush();
 
@@ -223,6 +229,7 @@ void OnUpdateChecked(Updater::ReleaseInfo* info) {
     if (info && Updater::IsNewer(info->version, APP_VERSION)) {
         g_release = *info;
         g_update.version = info->version;
+        g_update.notes = info->notes;
         SetUpdateStatus(UpdateState::Available);
     } else if (g_updateManual || g_update.status == UpdateState::Checking) {
         SetUpdateStatus(info ? UpdateState::UpToDate : UpdateState::Failed);
@@ -258,7 +265,19 @@ void EnsureFlyout() {
 void ShowMenu(int x, int y) {
     HMENU menu = CreatePopupMenu();
 
-    // Default audio input, as a radio list (minus the ones hidden in settings).
+    // Default output and input, as radio lists (minus the ones hidden in
+    // settings).
+    std::vector<std::wstring> outputIds;
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioOutput);
+    for (const AudioDevice& d : g_audio.Devices()) {
+        if (g_settings.IsDeviceHidden(d.id)) continue;
+        UINT id = IdOutputFirst + (UINT)outputIds.size();
+        AppendMenuW(menu, MF_STRING, id, d.name.c_str());
+        if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
+        outputIds.push_back(d.id);
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
     std::vector<std::wstring> inputIds;
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioInput);
     for (const InputDevice& in : g_audio.Inputs()) {
@@ -291,6 +310,10 @@ void ShowMenu(int x, int y) {
     PostMessageW(g_host, WM_NULL, 0, 0);
     DestroyMenu(menu);
 
+    if (cmd >= IdOutputFirst && cmd < IdOutputFirst + (int)outputIds.size()) {
+        g_audio.SetDefaultDevice(outputIds[cmd - IdOutputFirst]);
+        return;
+    }
     if (cmd >= IdInputFirst && cmd < IdInputFirst + (int)inputIds.size()) {
         g_audio.SetDefaultDevice(inputIds[cmd - IdInputFirst]);
         return;

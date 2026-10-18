@@ -3,6 +3,7 @@
 
 #include <propvarutil.h>
 #include <atomic>
+#include <cmath>
 #include <unordered_map>
 
 static const PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
@@ -280,11 +281,13 @@ void AudioManager::RefreshDevices() {
                                          (void**)d.endpoint.GetAddressOf()))) {
             d.endpoint->RegisterControlChangeNotify(events_);
         }
+        d.device->Activate(__uuidof(IAudioMeterInformation), CLSCTX_INPROC_SERVER, nullptr,
+                           (void**)d.meter.GetAddressOf());
         devices_.push_back(std::move(d));
     }
 
     std::stable_sort(devices_.begin(), devices_.end(), [](const AudioDevice& a, const AudioDevice& b) {
-        if (a.isDefault != b.isDefault) return a.isDefault;
+        if (a.isDefault != b.isDefault) return b.isDefault;  // current output last, next to the taskbar
         return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0;
     });
 
@@ -423,6 +426,8 @@ void AudioManager::LoadSessions(AudioDevice& d) {
         ctl->RegisterAudioSessionNotification(events_);
         it->controls.push_back(ctl);
         it->volumes.push_back(vol);
+        ComPtr<IAudioMeterInformation> meter;
+        if (SUCCEEDED(ctl.As(&meter))) it->meters.push_back(meter);
     }
 
     std::stable_sort(d.apps.begin(), d.apps.end(), [](const AppEntry& a, const AppEntry& b) {
@@ -448,6 +453,35 @@ void AudioManager::RefreshVolumes() {
             a.muted = m != FALSE;
         }
     }
+}
+
+// Meters report the signal before the volume is applied; scale by the volume
+// like EarTrumpet so the bar sits inside the filled part of the slider. Rises
+// instantly, falls smoothly.
+static bool Smooth(float& shown, float target) {
+    float next = target >= shown ? target : std::max(target, shown - 0.04f);
+    bool changed = std::abs(next - shown) > 0.002f;
+    shown = next;
+    return changed;
+}
+
+bool AudioManager::UpdatePeaks() {
+    bool changed = false;
+    for (auto& d : devices_) {
+        float p = 0;
+        if (d.meter) d.meter->GetPeakValue(&p);
+        changed |= Smooth(d.peak, d.muted ? 0.0f : p * d.volume);
+        for (auto& a : d.apps) {
+            float ap = 0;
+            for (auto& m : a.meters) {
+                float v = 0;
+                m->GetPeakValue(&v);
+                ap = std::max(ap, v);
+            }
+            changed |= Smooth(a.peak, (a.muted || d.muted) ? 0.0f : ap * a.volume);
+        }
+    }
+    return changed;
 }
 
 AudioDevice* AudioManager::DefaultDevice() {

@@ -3,7 +3,7 @@
 // Single source of the app version (used by the code and res\app.rc).
 // The GitHub release tag must be "v" + this, e.g. v1.1.0.
 #define VERSION_MAJOR 1
-#define VERSION_MINOR 1
+#define VERSION_MINOR 2
 #define VERSION_PATCH 0
 
 #define VERSION_STR2(a, b, c) #a "." #b "." #c

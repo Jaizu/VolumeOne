@@ -12,7 +12,8 @@
 
 struct Palette {
     bool dark = true;
-    D2D1_COLOR_F text, textSecondary, textTertiary;
+    D2D1_COLOR_F text, textSecondary, textTertiary, textDisabled;
+    D2D1_COLOR_F meter;
     D2D1_COLOR_F subtleHover, subtlePressed;
     D2D1_COLOR_F card, cardStroke, divider, footer;
     D2D1_COLOR_F trackOff, thumb, thumbStroke;
@@ -26,6 +27,7 @@ struct UpdateState {
     enum Status { Idle, Checking, UpToDate, Available, Failed, Installing, InstallFailed };
     Status status = Idle;
     std::wstring version;  // when Available
+    std::wstring notes;    // release notes, plain text
 };
 
 class Flyout {
@@ -89,7 +91,8 @@ private:
     float TextWidth(const std::wstring& s, IDWriteTextFormat* f);
     void Glyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR_F& c);
     void Button(const Hit& h, bool draw, float radius = 4);
-    void Slider(const Hit& h, float cy, float value, bool muted, bool draw);
+    void Slider(const Hit& h, float cy, float value, bool muted, float peak, bool draw);
+    void VolumeIcon(float volume, bool muted, const D2D1_RECT_F& r);
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
     void DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c);
