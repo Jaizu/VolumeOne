@@ -634,14 +634,14 @@ float Flyout::LayoutMixer(float y, bool draw) {
         AudioDevice& d = devices[di];
         bool expanded = IsExpanded(d);
         float top = y;
-        float h = expanded ? 12 + 24 + 40 + (d.apps.empty() ? 0 : 8 + 48.0f * d.apps.size()) + 8 : 44;
+        float h = expanded ? 44 + 40 + (d.apps.empty() ? 0 : 8 + 48.0f * d.apps.size()) + 8 : 44;
         if (draw) {
             Fill({x0, top, x1, top + h}, pal_.card, 8);
             Stroke({x0, top, x1, top + h}, pal_.cardStroke, 8);
         }
 
         // Header: click to collapse/expand.
-        Hit header{HitKind::Collapse, di, -1, {x0 + 1, top + 1, x1 - 1, top + (expanded ? 36.0f : 43.0f)}};
+        Hit header{HitKind::Collapse, di, -1, {x0 + 1, top + 1, x1 - 1, top + 43.0f}};
         Button(header, draw, 7);
         float cy = top + 12;
         if (draw) {
@@ -660,7 +660,7 @@ float Flyout::LayoutMixer(float y, bool draw) {
             y = top + h + 8;
             continue;
         }
-        cy += 24;
+        cy += 32;  // header is 44 tall, same as when collapsed
 
         // Device master volume.
         Hit mute{HitKind::Mute, di, -1, {x0 + 6, cy, x0 + 46, cy + 40}};
