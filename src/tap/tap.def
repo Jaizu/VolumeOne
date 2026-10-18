@@ -1,0 +1,4 @@
+LIBRARY VolumeOneTap
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
