@@ -5,7 +5,7 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 ## Unreleased
 
 ### New
-- **Use the Windows volume icon** (Settings): instead of a separate tray icon, the original volume icon in the taskbar opens VolumeOne. Left-click opens the mixer, right-click the menu, middle-click mutes and the mouse wheel changes the volume. Hovering it highlights the whole Quick Settings button, like the network icon.
+- **Replace the Windows volume icon** (Settings): VolumeOne takes over the original volume icon next to the network icon instead of adding its own tray icon. Left-click opens the mixer, right-click the menu, middle-click mutes and the mouse wheel changes the volume. Hovering it highlights the whole Quick Settings button, like the network icon.
 - **Remove volume from Quick Settings** (Settings): hides the volume slider in the Windows Quick Settings panel while VolumeOne is running. On laptops the brightness slider stays.
 
 - **Close and restore Windows** (Settings): for when you stop using VolumeOne. It closes the app, brings back the Windows volume icon and the Quick Settings slider, removes the startup entry, deletes its settings and data, and restarts the taskbar so nothing of it is left loaded.

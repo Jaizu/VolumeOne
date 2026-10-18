@@ -6,12 +6,12 @@
 
 settings = Settings
 back = Back
-useSystemIcon = Use the Windows volume icon
-useSystemIconDesc = Clicking the original taskbar icon opens VolumeOne, with no separate tray icon
+useSystemIcon = Replace the Windows volume icon
+useSystemIconDesc = VolumeOne takes over the volume icon next to the network icon: clicking it opens VolumeOne instead of Quick Settings. No extra icon is added to the tray
 hideQsVolume = Remove volume from Quick Settings
 hideQsVolumeDesc = Hides the volume control in the Windows Quick Settings panel while VolumeOne is running
 hideSystemIcon = Hide the Windows volume icon
-hideSystemIconDesc = Removes the volume icon from the taskbar while VolumeOne is running
+hideSystemIconDesc = When VolumeOne uses its own tray icon, removes the Windows one from the taskbar so there is only one
 startWithWindows = Start with Windows
 startWithWindowsDesc = Opens in the background when you sign in
 meterColor = Level meter colour

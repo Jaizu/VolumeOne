@@ -12,7 +12,7 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Hide devices** you don't want to see (for example bass shakers for sim racing), for outputs and inputs. Settings → Output devices / Input devices
 - **Device icons**: pick speakers, headphones or your own `.ico`/`.png` per output device (click the icon in Settings). Custom icons are copied to `%LOCALAPPDATA%\VolumeOne\icons`, so they keep working if you delete the original
 - **Switch the default microphone** from the tray icon's right-click menu
-- **Use the Windows volume icon** instead of a separate tray icon (toggle): the original taskbar icon opens VolumeOne (left-click mixer, right-click menu, middle-click mute, wheel for volume)
+- **Replace the Windows volume icon** (toggle): VolumeOne takes over the original icon next to the network icon instead of adding its own tray icon (left-click mixer, right-click menu, middle-click mute, wheel for volume)
 - **Remove the volume slider from Quick Settings** (toggle)
 - **Hide the Windows volume icon** from the taskbar (toggle). This replaces the Windhawk mod *taskbar-tray-system-icon-tweaks → hideVolumeIcon*. The icon comes back when you turn the toggle off or quit VolumeOne
 - **Start with Windows** (toggle)

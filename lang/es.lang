@@ -2,12 +2,12 @@
 
 settings = Configuración
 back = Atrás
-useSystemIcon = Usar el icono de volumen de Windows
-useSystemIconDesc = Al pulsar el icono original de la barra de tareas se abre VolumeOne, sin icono propio en la bandeja
+useSystemIcon = Sustituir el icono de volumen de Windows
+useSystemIconDesc = VolumeOne se queda con el icono de volumen que hay junto al de red: al pulsarlo se abre VolumeOne en vez de los Ajustes rápidos. No se añade ningún icono más a la bandeja
 hideQsVolume = Quitar el volumen de los Ajustes rápidos
 hideQsVolumeDesc = Oculta el control de volumen del panel de Ajustes rápidos de Windows mientras VolumeOne está abierto
 hideSystemIcon = Ocultar el icono de volumen de Windows
-hideSystemIconDesc = Quita el icono de volumen de la barra de tareas mientras VolumeOne está abierto
+hideSystemIconDesc = Cuando VolumeOne usa su propio icono en la bandeja, quita el de Windows de la barra de tareas para que solo haya uno
 startWithWindows = Iniciar con Windows
 startWithWindowsDesc = Se abre en segundo plano al iniciar sesión
 meterColor = Color del medidor de nivel
