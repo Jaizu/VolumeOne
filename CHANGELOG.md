@@ -11,7 +11,10 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 ### Changed
 - The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
 - The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place.
-- In Settings, the footer has a back arrow (in the gear's place) instead of the Exit button. Exit is still in the tray icon's right-click menu.
+- In Settings, the footer has a back arrow (in the gear's place) instead of the Exit button.
+- VolumeOne can no longer be closed from its own UI: Exit is gone from the right-click menu too.
+- The settings gear is drawn like the Quick Settings one (six pointed teeth, small hole) and turns when hovered and pressed.
+- Changing the volume with the mouse wheel over the taskbar icon (or muting with a middle-click) shows a small pill above the taskbar with the device, a bar and the percentage.
 
 ### Fixed
 - The header of an expanded device is now the same height as a collapsed one, so its hover highlight is centred on the name and icon.

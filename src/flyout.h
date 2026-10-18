@@ -49,6 +49,10 @@ public:
     void OnThemeChanged();
     void OnUpdateStateChanged();
 
+    // Small pill above the taskbar with the device's volume, shown while the
+    // volume is changed with the mouse wheel over the taskbar icon.
+    void ShowVolumeOsd(const AudioDevice& d);
+
 private:
     enum class View { Mixer, Settings };
     enum class HitKind {
@@ -66,6 +70,14 @@ private:
     };
 
     static LRESULT CALLBACK WndProcThunk(HWND, UINT, WPARAM, LPARAM);
+    static LRESULT CALLBACK OsdProc(HWND, UINT, WPARAM, LPARAM);
+    void RenderOsd();
+
+    // Settings gear drawn as a path (the Quick Settings one isn't the font
+    // glyph) that turns on hover and press.
+    void DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c);
+    void AnimateGear(float toDegrees, float ms);
+    float GearAngle(bool* animating = nullptr) const;
     LRESULT WndProc(UINT, WPARAM, LPARAM);
 
     void ApplyWindowStyle();
@@ -134,6 +146,19 @@ private:
     ComPtr<IWICImagingFactory> wic_;
     ComPtr<ID2D1HwndRenderTarget> rt_;
     ComPtr<ID2D1SolidColorBrush> brush_;
+    ComPtr<ID2D1PathGeometry> gearGeo_;
+    ComPtr<ID2D1StrokeStyle> roundStroke_;
+    float gearFrom_ = 0, gearTo_ = 0, gearMs_ = 1;
+    ULONGLONG gearStart_ = 0;
+    bool gearHot_ = false;
+
+    HWND osd_ = nullptr;
+    ComPtr<ID2D1HwndRenderTarget> osdRt_;
+    ComPtr<ID2D1SolidColorBrush> osdBrush_;
+    float osdScale_ = 1.0f;
+    std::wstring osdName_;
+    float osdVolume_ = 0;
+    bool osdMuted_ = false;
     ComPtr<IDWriteTextFormat> fTitle_, fBody_, fCaption_, fDesc_;
     std::map<int, ComPtr<IDWriteTextFormat>> iconFormats_;
     std::map<std::wstring, ComPtr<ID2D1Bitmap>> icons_;

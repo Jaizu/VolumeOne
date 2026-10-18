@@ -21,7 +21,7 @@ const UINT kTapWatchMs = 60 * 1000;
 const UINT kFirstUpdateCheckMs = 15 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
-enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdExit, IdInputFirst = 100, IdOutputFirst = 200 };
+enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdInputFirst = 100, IdOutputFirst = 200 };
 
 HINSTANCE g_inst;
 HWND g_host;
@@ -314,8 +314,6 @@ void ShowMenu(int x, int y) {
         std::wstring label = std::wstring(S().updateNow) + L" (" + g_update.version + L")";
         AppendMenuW(menu, MF_STRING, IdUpdate, label.c_str());
     }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IdExit, S().exit);
     SetMenuDefaultItem(menu, IdOpen, FALSE);
 
     SetForegroundWindow(g_host);
@@ -349,9 +347,6 @@ void ShowMenu(int x, int y) {
             break;
         case IdWindowsMixer:
             ShellExecuteW(nullptr, L"open", L"ms-settings:apps-volume", nullptr, nullptr, SW_SHOWNORMAL);
-            break;
-        case IdExit:
-            DestroyWindow(g_host);
             break;
     }
 }
@@ -416,13 +411,18 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 pt.x = std::clamp(pt.x, mi.rcWork.left, mi.rcWork.right - 1);
                 pt.y = std::clamp(pt.y, mi.rcWork.top, mi.rcWork.bottom - 1);
                 ShowMenu(pt.x, pt.y);
-            } else if (wp == SYSICON_MIDDLE) {
-                if (AudioDevice* d = g_audio.DefaultDevice()) g_audio.SetDeviceMute(*d, !d->muted);
-            } else if (wp == SYSICON_WHEEL) {
-                if (AudioDevice* d = g_audio.DefaultDevice()) {
+            } else if (wp == SYSICON_MIDDLE || wp == SYSICON_WHEEL) {
+                AudioDevice* d = g_audio.DefaultDevice();
+                if (!d) return 0;
+                if (wp == SYSICON_MIDDLE) {
+                    g_audio.SetDeviceMute(*d, !d->muted);
+                } else {
                     float v = d->volume + (int)(short)lp / (float)WHEEL_DELTA * 0.02f;
                     g_audio.SetDeviceVolume(*d, std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 1.0f));
                 }
+                // Feedback, unless the mixer is open and already shows it.
+                EnsureFlyout();
+                if (!g_flyout.IsVisible()) g_flyout.ShowVolumeOsd(*d);
             }
             return 0;
 

@@ -249,7 +249,7 @@ void Flyout::Show(bool settingsView) {
                  SWP_NOSIZE | SWP_NOACTIVATE);
 
     visible_ = true;
-    SetTimer(hwnd_, kMeterTimer, 33, nullptr);
+    SetTimer(hwnd_, kMeterTimer, 16, nullptr);  // level meters and the gear animation
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
     UpdateWindow(hwnd_);
@@ -895,7 +895,12 @@ void Flyout::LayoutFooter(float top, bool draw) {
                {kWidth - 50, top + 6, kWidth - 14, top + 42}};
     corner.footer = true;
     Button(corner, draw);
-    if (draw) Glyph(view_ == View::Mixer ? kGlyphSettings : kGlyphBack, 16, corner.rect, pal_.text);
+    if (draw) {
+        if (view_ == View::Mixer)
+            DrawGear(corner.rect, pal_.text);
+        else
+            Glyph(kGlyphBack, 16, corner.rect, pal_.text);
+    }
 
     if (view_ == View::Mixer) {
         float tw = TextWidth(S().soundSettings, fBody_.Get());
@@ -1049,6 +1054,8 @@ void Flyout::Activate(const Hit& h) {
             }
             break;
         case HitKind::Gear:
+            gearFrom_ = gearTo_ = 0;  // straight again when coming back
+            gearHot_ = false;
             view_ = View::Settings;
             scroll_ = 0;
             startup_ = GetStartWithWindows();
@@ -1113,6 +1120,192 @@ void Flyout::Activate(const Hit& h) {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+// ---------------------------------------------------------------------------
+// Settings gear: six pointed teeth and a small hole, outlined, like the
+// animated gear in the Quick Settings footer (Segoe's E713 is chunkier). It
+// turns a bit on hover and further while pressed.
+
+static ComPtr<ID2D1PathGeometry> MakeGearGeometry(ID2D1Factory* f) {
+    const int teeth = 6;
+    const float outer = 7.2f, root = 4.9f;      // radii in DIPs, for a 16 DIP icon
+    const float tipHalf = 10.0f, rootHalf = 21.0f;  // half-widths in degrees
+    ComPtr<ID2D1PathGeometry> geo;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(f->CreatePathGeometry(&geo)) || FAILED(geo->Open(&sink))) return nullptr;
+    auto at = [](float r, float deg) {
+        float a = deg * 3.14159265f / 180.0f;
+        return D2D1::Point2F(r * std::cos(a), r * std::sin(a));
+    };
+    for (int i = 0; i < teeth; i++) {
+        float c = -90.0f + i * 360.0f / teeth;  // first tooth points up
+        D2D1_POINT_2F pts[] = {at(root, c - rootHalf), at(outer, c - tipHalf), at(outer, c + tipHalf), at(root, c + rootHalf)};
+        if (i == 0)
+            sink->BeginFigure(pts[0], D2D1_FIGURE_BEGIN_HOLLOW);
+        else
+            sink->AddLine(pts[0]);
+        sink->AddLines(pts + 1, 3);
+    }
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+    return geo;
+}
+
+float Flyout::GearAngle(bool* animating) const {
+    float t = (GetTickCount64() - gearStart_) / gearMs_;
+    if (animating) *animating = t < 1.0f;
+    if (t >= 1.0f) return gearTo_;
+    float e = 1.0f - std::pow(1.0f - t, 3.0f);
+    return gearFrom_ + (gearTo_ - gearFrom_) * e;
+}
+
+void Flyout::AnimateGear(float toDegrees, float ms) {
+    gearFrom_ = GearAngle();
+    gearTo_ = toDegrees;
+    gearMs_ = ms;
+    gearStart_ = GetTickCount64();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void Flyout::DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c) {
+    if (!gearGeo_) gearGeo_ = MakeGearGeometry(d2d_.Get());
+    if (!roundStroke_) {
+        auto props = D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                                                 D2D1_LINE_JOIN_ROUND);
+        d2d_->CreateStrokeStyle(props, nullptr, 0, &roundStroke_);
+    }
+    if (!gearGeo_) return;
+    D2D1_MATRIX_3X2_F old;
+    rt_->GetTransform(&old);
+    D2D1_POINT_2F center = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+    rt_->SetTransform(D2D1::Matrix3x2F::Rotation(GearAngle()) * D2D1::Matrix3x2F::Translation(center.x, center.y) * old);
+    brush_->SetColor(c);
+    rt_->DrawGeometry(gearGeo_.Get(), brush_.Get(), 1.0f, roundStroke_.Get());
+    rt_->DrawEllipse(D2D1::Ellipse({0, 0}, 1.9f, 1.9f), brush_.Get(), 1.0f);
+    rt_->SetTransform(old);
+}
+
+// ---------------------------------------------------------------------------
+// Volume OSD
+
+static const float kOsdWidth = 240.0f, kOsdHeight = 60.0f;
+static const UINT_PTR kOsdHideTimer = 1;
+
+void Flyout::ShowVolumeOsd(const AudioDevice& d) {
+    osdName_ = d.name;
+    osdVolume_ = d.volume;
+    osdMuted_ = d.muted;
+
+    if (!osd_) {
+        WNDCLASSEXW wc = {sizeof(wc)};
+        wc.lpfnWndProc = OsdProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.lpszClassName = L"VolumeOne.Osd";
+        RegisterClassExW(&wc);
+        osd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, wc.lpszClassName, APP_NAME,
+                               WS_POPUP, 0, 0, 10, 10, owner_, nullptr, wc.hInstance, this);
+        if (!osd_) return;
+        SetWindowLongPtrW(osd_, GWLP_USERDATA, (LONG_PTR)this);
+    }
+    // Same look as the flyout.
+    BOOL dark = pal_.dark;
+    DwmSetWindowAttribute(osd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+    DwmSetWindowAttribute(osd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+    DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_TRANSIENTWINDOW;
+    DwmSetWindowAttribute(osd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+    MARGINS margins = {-1, -1, -1, -1};
+    DwmExtendFrameIntoClientArea(osd_, &margins);
+
+    // Centred over the cursor (it's on the taskbar icon), above the taskbar.
+    POINT pt;
+    GetCursorPos(&pt);
+    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = {sizeof(mi)};
+    GetMonitorInfoW(mon, &mi);
+    UINT dpiX = 96, dpiY = 96;
+    GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+    osdScale_ = dpiX / 96.0f;
+    int w = (int)std::lround(kOsdWidth * osdScale_), h = (int)std::lround(kOsdHeight * osdScale_);
+    int m = (int)std::lround(12 * osdScale_);
+    const RECT& work = mi.rcWork;
+    int x = std::clamp((int)pt.x - w / 2, (int)work.left + m, (int)work.right - m - w);
+    int y = work.bottom - m - h;
+    if (work.top > mi.rcMonitor.top) y = work.top + m;  // taskbar at the top
+    SetWindowPos(osd_, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    if (osdRt_) {
+        osdRt_->SetDpi(96.0f * osdScale_, 96.0f * osdScale_);
+        osdRt_->Resize(D2D1::SizeU(w, h));
+    }
+    RenderOsd();
+    SetTimer(osd_, kOsdHideTimer, 1500, nullptr);
+}
+
+void Flyout::RenderOsd() {
+    if (!osd_ || !EnsureResources()) return;
+    if (!osdRt_) {
+        RECT rc;
+        GetClientRect(osd_, &rc);
+        auto props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f * osdScale_, 96.0f * osdScale_);
+        if (FAILED(d2d_->CreateHwndRenderTarget(props, D2D1::HwndRenderTargetProperties(osd_, D2D1::SizeU(rc.right, rc.bottom)),
+                                                &osdRt_)))
+            return;
+        osdRt_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        osdRt_->CreateSolidColorBrush(pal_.text, &osdBrush_);
+    }
+    // The drawing helpers use rt_/brush_: point them at the OSD meanwhile.
+    std::swap(rt_, osdRt_);
+    std::swap(brush_, osdBrush_);
+    rt_->BeginDraw();
+    rt_->SetTransform(D2D1::Matrix3x2F::Identity());
+    rt_->Clear(D2D1::ColorF(0, 0, 0, 0));
+    Fill({0, 0, kOsdWidth, kOsdHeight}, pal_.tint);
+    Text(osdName_, fCaption_.Get(), {16, 8, kOsdWidth - 16, 26}, pal_.textSecondary);
+    VolumeIcon(osdVolume_, osdMuted_, {8, 28, 40, 52});
+    const float x0 = 48, x1 = kOsdWidth - 52, cy = 40;
+    Fill({x0, cy - 2, x1, cy + 2}, pal_.trackOff, 2);
+    float tx = x0 + std::clamp(osdVolume_, 0.0f, 1.0f) * (x1 - x0);
+    if (tx > x0 + 1) Fill({x0, cy - 2, tx, cy + 2}, osdMuted_ ? pal_.textTertiary : pal_.accent, 2);
+    Text(std::to_wstring((int)std::lround(osdVolume_ * 100.0f)), fBody_.Get(), {x1 + 8, 28, kOsdWidth - 16, 52}, pal_.text,
+         DWRITE_TEXT_ALIGNMENT_TRAILING);
+    HRESULT hr = rt_->EndDraw();
+    std::swap(rt_, osdRt_);
+    std::swap(brush_, osdBrush_);
+    if (hr == D2DERR_RECREATE_TARGET) {
+        osdBrush_.Reset();
+        osdRt_.Reset();
+    }
+}
+
+LRESULT CALLBACK Flyout::OsdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto self = (Flyout*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg) {
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;  // clicks go through to the taskbar
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            if (self) self->RenderOsd();
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_TIMER:
+            if (wp == kOsdHideTimer) {
+                KillTimer(hwnd, wp);
+                ShowWindow(hwnd, SW_HIDE);
+            }
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 LRESULT CALLBACK Flyout::WndProcThunk(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_NCCREATE) {
         auto self = (Flyout*)((CREATESTRUCTW*)lp)->lpCreateParams;
@@ -1144,8 +1337,12 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_TIMER:
-            if (wp == kMeterTimer && visible_ && view_ == View::Mixer && audio_->UpdatePeaks())
-                InvalidateRect(hwnd_, nullptr, FALSE);
+            if (wp == kMeterTimer && visible_) {
+                bool gearMoving = false;
+                GearAngle(&gearMoving);
+                bool peaks = view_ == View::Mixer && audio_->UpdatePeaks();
+                if (gearMoving || peaks) InvalidateRect(hwnd_, nullptr, FALSE);
+            }
             return 0;
 
         case WM_SIZE:
@@ -1173,6 +1370,9 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             Hit h = HitTest(x, y);
             if (!(h == hover_)) {
                 hover_ = h;
+                bool hot = h.kind == HitKind::Gear;
+                if (hot != gearHot_) AnimateGear(hot ? 60.0f : 0.0f, 300);
+                gearHot_ = hot;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;
@@ -1181,6 +1381,8 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             tracking_ = false;
             if (!dragging_) {
                 hover_ = Hit{};
+                if (gearHot_) AnimateGear(0, 300);
+                gearHot_ = false;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;
@@ -1189,6 +1391,7 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             float x = GET_X_LPARAM(lp) / scale_, y = GET_Y_LPARAM(lp) / scale_;
             SetCapture(hwnd_);
             pressed_ = HitTest(x, y);
+            if (pressed_.kind == HitKind::Gear) AnimateGear(150, 250);  // keeps turning while pressed
             if (pressed_.kind == HitKind::Slider) {
                 dragging_ = true;
                 SetSliderValue(pressed_, x);

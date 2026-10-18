@@ -24,7 +24,6 @@ struct Strings {
     const wchar_t* soundSettings;
     const wchar_t* openMixer;
     const wchar_t* windowsMixer;
-    const wchar_t* exit;
     const wchar_t* muted;
     const wchar_t* audioOutput;
     const wchar_t* audioInput;
@@ -67,7 +66,6 @@ inline const Strings& S() {
         L"Configuración de sonido",
         L"Abrir mezclador",
         L"Mezclador de volumen de Windows",
-        L"Salir",
         L"Silenciado",
         L"Salida de audio",
         L"Entrada de audio",
@@ -108,7 +106,6 @@ inline const Strings& S() {
         L"Sound settings",
         L"Open mixer",
         L"Windows volume mixer",
-        L"Exit",
         L"Muted",
         L"Audio output",
         L"Audio input",
