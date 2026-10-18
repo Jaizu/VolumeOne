@@ -2,33 +2,31 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
-## Unreleased
+## 1.3.0
 
 ### New
 - **Replace the Windows volume icon** (Settings): VolumeOne takes over the original volume icon next to the network icon instead of adding its own tray icon. Left-click opens the mixer, right-click the menu, middle-click mutes and the mouse wheel changes the volume. Hovering it highlights the whole Quick Settings button, like the network icon.
+- **Volume pill**: changing the volume with the mouse wheel over the taskbar icon, or muting with a middle-click, shows a small pill above the taskbar with the device, a bar and the percentage.
 - **Remove volume from Quick Settings** (Settings): hides the volume slider in the Windows Quick Settings panel while VolumeOne is running. On laptops the brightness slider stays.
-
+- **Level meter colour** (Settings): accent, white, green (like Windows 7) or a custom hex colour. With green, the filled part of the sliders turns white (dark theme) or dark grey (light theme) so the green stands out.
 - **Close and restore Windows** (Settings): for when you stop using VolumeOne. It closes the app, brings back the Windows volume icon and the Quick Settings slider, removes the startup entry, deletes its settings and data, and restarts the taskbar so nothing of it is left loaded.
-- **Level meter colour** (Settings): accent, white, green (like Windows 7) or a custom hex colour.
+- **Location warning**: if VolumeOne runs from Downloads, the Desktop or a temp folder, a yellow banner offers to move it to `Documents\VolumeOne` and updates "Start with Windows". Works with any Windows language and with redirected folders.
 - **Translations**: the texts live in `lang/*.lang` files, one per language, so they're easy to translate. English and Spanish for now, picked from the Windows display language. See `lang/README.md` to add one.
-- **Location warning**: if VolumeOne runs from Downloads, the Desktop or a temp folder, a yellow banner offers to move it to `Documents\VolumeOne` (and updates "Start with Windows"). Works with any Windows language and with redirected folders.
 
 ### Changed
-- When explorer (or Quick Settings) still has an older VolumeOne helper loaded, for example after an update, VolumeOne restarts it automatically so the new one is used. explorer is restarted through the Windows Restart Manager, which reopens File Explorer windows.
+- When explorer or Quick Settings still has an older VolumeOne helper loaded (for example after an update), VolumeOne restarts it automatically so the new one is used. explorer goes through the Windows Restart Manager, which reopens File Explorer windows.
+- The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place, drawn like the Quick Settings gear.
+- The gear turns when clicked and the settings slide in; in Settings, a back arrow takes its place and turns from left to down when going back. The back button at the top of Settings is gone.
 - The Output devices and Input devices sections in Settings start collapsed, sit in a card like the rest, and have a clearly visible collapse button.
-- With the green level meter, the filled part of the sliders turns white (dark theme) or dark grey (light theme) so the green stands out.
-- The gear only turns when clicked; the view then slides in, and the back arrow turns from left to down when going back.
-- The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
-- The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place.
-- In Settings, the footer has a back arrow (in the gear's place) instead of the Exit button.
-- VolumeOne can no longer be closed from its own UI: Exit is gone from the right-click menu too.
-- The settings gear is drawn like the Quick Settings one (six pointed teeth, small hole).
-- Changing the volume with the mouse wheel over the taskbar icon (or muting with a middle-click) shows a small pill above the taskbar with the device, a bar and the percentage.
+- The level meter is thicker than the slider track and a solid colour, so it's easier to see.
+- Clearer wording for the volume icon options.
+- VolumeOne can no longer be closed from its own UI (Exit is gone from Settings and the right-click menu). To stop using it, use **Close and restore Windows**.
 
 ### Fixed
-- The header of an expanded device is now the same height as a collapsed one, so its hover highlight is centred on the name and icon.
-- The flyout closes when you click anywhere else, also when it was opened from the Windows volume icon (it didn't, because Windows doesn't give it the focus in that case).
-- The right-click menu opened from the Windows volume icon is placed above the taskbar instead of partly behind it.
+- The header of an expanded device is the same height as a collapsed one, so its hover highlight is centred.
+- The mixer closes when you click anywhere else, also when it was opened from the Windows volume icon.
+- The right-click menu opened from the Windows volume icon appears above the taskbar instead of partly behind it.
+- Release notes in Settings no longer show a stray Markdown header when the notes file starts with a byte order mark.
 
 ## 1.2.0
 
