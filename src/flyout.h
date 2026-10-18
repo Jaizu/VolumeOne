@@ -105,6 +105,7 @@ private:
     void SwitchView(View v);
     bool Animating() const;
     D2D1_COLOR_F MeterColorFor(Settings::MeterColor c) const;
+    D2D1_COLOR_F SliderFill() const;  // filled part of the sliders (neutral with the green meter)
     void UpdateHexEdit();
     LRESULT WndProc(UINT, WPARAM, LPARAM);
 

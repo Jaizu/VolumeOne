@@ -15,7 +15,8 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 
 ### Changed
 - When explorer (or Quick Settings) still has an older VolumeOne helper loaded, for example after an update, VolumeOne restarts it automatically so the new one is used. explorer is restarted through the Windows Restart Manager, which reopens File Explorer windows.
-- The Output devices and Input devices sections in Settings start collapsed.
+- The Output devices and Input devices sections in Settings start collapsed, sit in a card like the rest, and have a clearly visible collapse button.
+- With the green level meter, the filled part of the sliders turns white (dark theme) or dark grey (light theme) so the green stands out.
 - The gear only turns when clicked; the view then slides in, and the back arrow turns from left to down when going back.
 - The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
 - The footer matches the Quick Settings one: same height and colour, no divider line, and the gear in the same place.

@@ -435,6 +435,11 @@ void Flyout::Glyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR
     rt_->DrawText(&g, 1, fmt.Get(), r, brush_.Get());
 }
 
+D2D1_COLOR_F Flyout::SliderFill() const {
+    if (settings_->meterColor == Settings::MeterGreen) return pal_.dark ? Rgba(0xFFFFFF) : Rgba(0x3A3A3A);
+    return pal_.accent;
+}
+
 // The level glyph over the full set of bars drawn dim, like the Windows
 // volume icon, so the inactive bars still show.
 void Flyout::VolumeIcon(float volume, bool muted, const D2D1_RECT_F& r) {
@@ -452,7 +457,8 @@ void Flyout::Slider(const Hit& h, float cy, float value, bool muted, float peak,
     if (!draw) return;
     float x0 = h.trackX0, x1 = h.trackX1;
     float tx = x0 + std::clamp(value, 0.0f, 1.0f) * (x1 - x0);
-    D2D1_COLOR_F fill = muted ? pal_.textTertiary : pal_.accent;
+    // With the green meter the accent fill would clash, so it turns neutral.
+    D2D1_COLOR_F fill = muted ? pal_.textTertiary : SliderFill();
 
     Fill({x0, cy - 2, x1, cy + 2}, pal_.trackOff, 2);
     if (tx > x0 + 1) Fill({x0, cy - 2, tx, cy + 2}, fill, 2);
@@ -783,19 +789,28 @@ float Flyout::LayoutSettings(float y, bool draw) {
     };
     // Section title + description; clickable (with a chevron) when it can
     // collapse.
-    auto section = [&](const wchar_t* title, const wchar_t* desc, HitKind kind, bool expanded) {
-        float dh = TextHeight(desc, fDesc_.Get(), x1 - x0 - 48);
-        float h = 22 + dh + 12;
-        if (kind != HitKind::None) {
-            Hit hdr{kind, -1, -1, {x0 - 4, y - 6, x1 + 4, y - 6 + h}};
-            Button(hdr, draw, 6);
-            if (draw) Glyph(expanded ? kGlyphChevronUp : kGlyphChevronDown, 12, {x1 - 28, y, x1 - 4, y + 20}, pal_.textSecondary);
-        }
+    // A collapsible section: one card with a header (title, description and a
+    // chevron button) and, when expanded, its rows below. Returns the y where
+    // the rows start.
+    auto section = [&](const wchar_t* title, const wchar_t* desc, HitKind kind, bool expanded, float rowsH) {
+        const float textR = x1 - 12 - 32 - 12;
+        float dh = TextHeight(desc, fDesc_.Get(), textR - (x0 + 16));
+        float hdrH = 12 + 20 + dh + 12;
+        card(y, hdrH + (expanded ? rowsH : 0));
+        Hit hdr{kind, -1, -1, {x0, y, x1, y + hdrH}};
+        hits_.push_back(hdr);
         if (draw) {
-            Text(title, fTitle_.Get(), {x0 + 4, y, x1 - 32, y + 20}, pal_.text);
-            Text(desc, fDesc_.Get(), {x0 + 4, y + 22, x1 - 32, y + 22 + dh}, pal_.textSecondary);
+            Text(title, fBody_.Get(), {x0 + 16, y + 12, textR, y + 32}, pal_.text);
+            Text(desc, fDesc_.Get(), {x0 + 16, y + 32, textR, y + 32 + dh}, pal_.textSecondary);
+            D2D1_RECT_F btn = {x1 - 12 - 32, y + hdrH / 2 - 16, x1 - 12, y + hdrH / 2 + 16};
+            Fill(btn, pal_.toggleOffFill, 4);
+            if (hover_ == hdr) Fill(btn, pressed_ == hdr ? pal_.subtlePressed : pal_.subtleHover, 4);
+            Stroke(btn, pal_.cardStroke, 4);
+            Glyph(expanded ? kGlyphChevronUp : kGlyphChevronDown, 14, btn, pal_.text);
+            if (expanded) Fill({x0 + 1, y + hdrH, x1 - 1, y + hdrH + 1}, pal_.divider);
         }
-        y += h;
+        y += hdrH;
+        return y;
     };
 
     // General toggles.
@@ -872,15 +887,14 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 Text(L"#", fBody_.Get(), {hexRect_.left + 10, fy, hexRect_.left + 24, fy + 32}, pal_.textSecondary);
             }
         }
-        y += h + 20;
+        y += h + 12;
     }
 
     // Output devices: icon button + visibility toggle. Collapsed by default.
-    section(S().outputDevices, S().outputDevicesDesc, HitKind::SectionOutputs, outputsExpanded_);
+    auto& devices = audio_->Devices();
+    float devH = 48.0f * devices.size();
+    section(S().outputDevices, S().outputDevicesDesc, HitKind::SectionOutputs, outputsExpanded_, devH);
     if (outputsExpanded_) {
-        auto& devices = audio_->Devices();
-        float devH = 48.0f * devices.size();
-        card(y, devH);
         for (int i = 0; i < (int)devices.size(); i++) {
             const AudioDevice& d = devices[i];
             float top = y + 48.0f * i;
@@ -896,16 +910,15 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 Text(d.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
             }
         }
-        y += devH + 12;
+        y += devH;
     }
-    y += 8;
+    y += 12;
 
     // Input devices: visibility in the right-click menu. Collapsed by default.
-    section(S().inputDevices, S().inputDevicesDesc, HitKind::SectionInputs, inputsExpanded_);
+    auto& inputs = audio_->Inputs();
+    float inH = 48.0f * inputs.size();
+    section(S().inputDevices, S().inputDevicesDesc, HitKind::SectionInputs, inputsExpanded_, inH);
     if (inputsExpanded_) {
-        auto& inputs = audio_->Inputs();
-        float inH = 48.0f * inputs.size();
-        card(y, inH);
         for (int i = 0; i < (int)inputs.size(); i++) {
             const InputDevice& in = inputs[i];
             float top = y + 48.0f * i;
@@ -919,9 +932,9 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 Text(in.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
             }
         }
-        y += inH + 12;
+        y += inH;
     }
-    y += 8;
+    y += 12;
 
     // A labelled row with a button on the right, in its own card.
     auto buttonRow = [&](const wchar_t* label, const std::wstring& desc, const wchar_t* button, HitKind kind, bool accent,
