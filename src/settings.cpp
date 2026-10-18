@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <shlobj.h>
+
 static const wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 void Settings::Load() {
@@ -20,6 +22,18 @@ void Settings::Load() {
                 hiddenDevices.emplace_back(p);
         }
     }
+
+    deviceIcons.clear();
+    HKEY icons;
+    if (RegOpenKeyExW(key, L"DeviceIcons", 0, KEY_READ, &icons) == ERROR_SUCCESS) {
+        wchar_t name[512], data[MAX_PATH * 2];
+        for (DWORD i = 0;; i++) {
+            DWORD nameLen = ARRAYSIZE(name), dataLen = sizeof(data), type = 0;
+            if (RegEnumValueW(icons, i, name, &nameLen, nullptr, &type, (BYTE*)data, &dataLen) != ERROR_SUCCESS) break;
+            if (type == REG_SZ) deviceIcons[name] = data;
+        }
+        RegCloseKey(icons);
+    }
     RegCloseKey(key);
 }
 
@@ -39,6 +53,15 @@ void Settings::Save() const {
     multi.push_back(L'\0');
     RegSetValueExW(key, L"HiddenDevices", 0, REG_MULTI_SZ, (const BYTE*)multi.data(),
                    (DWORD)(multi.size() * sizeof(wchar_t)));
+
+    RegDeleteTreeW(key, L"DeviceIcons");
+    HKEY icons;
+    if (RegCreateKeyExW(key, L"DeviceIcons", 0, nullptr, 0, KEY_WRITE, nullptr, &icons, nullptr) == ERROR_SUCCESS) {
+        for (const auto& [id, value] : deviceIcons)
+            RegSetValueExW(icons, id.c_str(), 0, REG_SZ, (const BYTE*)value.c_str(),
+                           (DWORD)((value.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(icons);
+    }
     RegCloseKey(key);
 }
 
@@ -52,6 +75,21 @@ void Settings::SetDeviceHidden(const std::wstring& id, bool hidden) {
         hiddenDevices.push_back(id);
     else if (!hidden && it != hiddenDevices.end())
         hiddenDevices.erase(it);
+}
+
+std::wstring AppDataDir(const wchar_t* sub) {
+    PWSTR base = nullptr;
+    std::wstring dir;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &base))) dir = base;
+    CoTaskMemFree(base);
+    dir += L"\\" APP_NAME;
+    CreateDirectoryW(dir.c_str(), nullptr);
+    if (sub) {
+        dir += L"\\";
+        dir += sub;
+        CreateDirectoryW(dir.c_str(), nullptr);
+    }
+    return dir;
 }
 
 static std::wstring RunCommand() {

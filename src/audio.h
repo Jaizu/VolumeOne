@@ -26,12 +26,19 @@ struct AudioDevice {
     std::wstring name;
     FormFactor formFactor = FormFactor::Speakers;
     bool isDefault = false;
+    bool playing = false;  // has an active session (only known while sessions are tracked)
     float volume = 0.0f;
     bool muted = false;
     ComPtr<IMMDevice> device;
     ComPtr<IAudioEndpointVolume> endpoint;
     ComPtr<IAudioSessionManager2> sessionManager;
     std::vector<AppEntry> apps;
+};
+
+struct InputDevice {
+    std::wstring id;
+    std::wstring name;
+    bool isDefault = false;
 };
 
 class AudioEvents;
@@ -51,6 +58,11 @@ public:
 
     std::vector<AudioDevice>& Devices() { return devices_; }
     AudioDevice* DefaultDevice();
+    const std::vector<InputDevice>& Inputs() const { return inputs_; }
+
+    // Makes a device the default for every role (console, multimedia,
+    // communications), like the Sound control panel does.
+    bool SetDefaultDevice(const std::wstring& id);
 
     void SetDeviceVolume(AudioDevice& d, float v);
     void SetDeviceMute(AudioDevice& d, bool mute);
@@ -61,10 +73,12 @@ private:
     void ClearDevices();
     void ClearSessions();
     void LoadSessions(AudioDevice& d);
+    void LoadInputs();
 
     HWND hwnd_ = nullptr;
     ComPtr<IMMDeviceEnumerator> enumerator_;
     AudioEvents* events_ = nullptr;
     std::vector<AudioDevice> devices_;
+    std::vector<InputDevice> inputs_;
     bool trackSessions_ = false;
 };

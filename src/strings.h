@@ -13,6 +13,8 @@ struct Strings {
     const wchar_t* startWithWindowsDesc;
     const wchar_t* outputDevices;
     const wchar_t* outputDevicesDesc;
+    const wchar_t* inputDevices;
+    const wchar_t* inputDevicesDesc;
     const wchar_t* noDevices;
     const wchar_t* systemSounds;
     const wchar_t* soundSettings;
@@ -20,7 +22,22 @@ struct Strings {
     const wchar_t* windowsMixer;
     const wchar_t* exit;
     const wchar_t* muted;
-    const wchar_t* defaultDevice;
+    const wchar_t* audioInput;
+    const wchar_t* noInputs;
+    const wchar_t* iconAuto;
+    const wchar_t* iconSpeakers;
+    const wchar_t* iconHeadphones;
+    const wchar_t* iconCustom;
+    const wchar_t* iconFiles;
+    const wchar_t* updates;
+    const wchar_t* checkUpdates;
+    const wchar_t* checking;
+    const wchar_t* upToDate;
+    const wchar_t* checkFailed;
+    const wchar_t* updateAvailable;  // followed by the version
+    const wchar_t* updateNow;
+    const wchar_t* updating;
+    const wchar_t* updateFailed;
 };
 
 inline const Strings& S() {
@@ -32,7 +49,9 @@ inline const Strings& S() {
         L"Iniciar con Windows",
         L"Se abre en segundo plano al iniciar sesión",
         L"Dispositivos de salida",
-        L"Desactiva los que no quieras ver en el mezclador",
+        L"Desactiva los que no quieras ver en el mezclador. Pulsa el icono para cambiarlo",
+        L"Dispositivos de entrada",
+        L"Desactiva los que no quieras ver en el menú del botón derecho",
         L"No hay dispositivos de salida visibles",
         L"Sonidos del sistema",
         L"Configuración de sonido",
@@ -40,7 +59,22 @@ inline const Strings& S() {
         L"Mezclador de volumen de Windows",
         L"Salir",
         L"Silenciado",
-        L"Predeterminado",
+        L"Entrada de audio",
+        L"No hay entradas de audio",
+        L"Automático",
+        L"Altavoces",
+        L"Auriculares",
+        L"Icono personalizado…",
+        L"Iconos e imágenes",
+        L"Actualizaciones",
+        L"Buscar actualizaciones",
+        L"Buscando…",
+        L"Estás al día",
+        L"No se pudo comprobar",
+        L"Disponible la versión ",
+        L"Actualizar",
+        L"Actualizando…",
+        L"No se pudo actualizar",
     };
     static const Strings en = {
         L"Settings",
@@ -50,7 +84,9 @@ inline const Strings& S() {
         L"Start with Windows",
         L"Opens in the background when you sign in",
         L"Output devices",
-        L"Turn off the ones you don't want to see in the mixer",
+        L"Turn off the ones you don't want to see in the mixer. Click the icon to change it",
+        L"Input devices",
+        L"Turn off the ones you don't want to see in the right-click menu",
         L"No visible output devices",
         L"System sounds",
         L"Sound settings",
@@ -58,7 +94,22 @@ inline const Strings& S() {
         L"Windows volume mixer",
         L"Exit",
         L"Muted",
-        L"Default",
+        L"Audio input",
+        L"No audio inputs",
+        L"Automatic",
+        L"Speakers",
+        L"Headphones",
+        L"Custom icon…",
+        L"Icons and images",
+        L"Updates",
+        L"Check for updates",
+        L"Checking…",
+        L"You're up to date",
+        L"Couldn't check",
+        L"Version available: ",
+        L"Update",
+        L"Updating…",
+        L"Update failed",
     };
     static const bool spanish = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_SPANISH;
     return spanish ? es : en;

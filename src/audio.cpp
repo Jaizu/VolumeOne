@@ -53,7 +53,8 @@ public:
     STDMETHODIMP OnDeviceAdded(LPCWSTR) override { return Post(WM_APP_DEVICES_CHANGED); }
     STDMETHODIMP OnDeviceRemoved(LPCWSTR) override { return Post(WM_APP_DEVICES_CHANGED); }
     STDMETHODIMP OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR) override {
-        if (flow == eRender && role == eMultimedia) Post(WM_APP_DEVICES_CHANGED);
+        if ((flow == eRender && role == eMultimedia) || (flow == eCapture && role == eConsole))
+            Post(WM_APP_DEVICES_CHANGED);
         return S_OK;
     }
     STDMETHODIMP OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY key) override {
@@ -93,6 +94,29 @@ private:
     std::atomic<HWND> hwnd_;
     std::atomic<ULONG> refs_{1};
     std::atomic<bool> volumePending_{false};
+};
+
+// ---------------------------------------------------------------------------
+// IPolicyConfig: undocumented but stable since Windows 7; it's what the Sound
+// control panel (and EarTrumpet, SoundSwitch...) use to change the default
+// device. Only SetDefaultEndpoint is called; the rest just fill the vtable.
+
+static const CLSID kPolicyConfigClient = {0x870af99c, 0x171d, 0x4f9e, {0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9}};
+
+MIDL_INTERFACE("f8679f50-850a-41cf-9c72-430f290290c8")
+IPolicyConfig : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR, INT, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR, void*, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR, INT, PINT64, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR, ERole) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR, INT) = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -266,7 +290,60 @@ void AudioManager::RefreshDevices() {
 
     if (trackSessions_)
         for (auto& d : devices_) LoadSessions(d);
+    LoadInputs();
     RefreshVolumes();
+}
+
+static std::wstring FriendlyName(IMMDevice* device) {
+    std::wstring name;
+    ComPtr<IPropertyStore> props;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &props))) {
+        PROPVARIANT v;
+        PropVariantInit(&v);
+        if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR) name = v.pwszVal;
+        PropVariantClear(&v);
+    }
+    return name;
+}
+
+void AudioManager::LoadInputs() {
+    inputs_.clear();
+    std::wstring defaultId;
+    ComPtr<IMMDevice> def;
+    if (SUCCEEDED(enumerator_->GetDefaultAudioEndpoint(eCapture, eConsole, &def))) {
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(def->GetId(&id))) {
+            defaultId = id;
+            CoTaskMemFree(id);
+        }
+    }
+    ComPtr<IMMDeviceCollection> collection;
+    if (FAILED(enumerator_->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection))) return;
+    UINT count = 0;
+    collection->GetCount(&count);
+    for (UINT i = 0; i < count; i++) {
+        ComPtr<IMMDevice> device;
+        LPWSTR id = nullptr;
+        if (FAILED(collection->Item(i, &device)) || FAILED(device->GetId(&id))) continue;
+        InputDevice in;
+        in.id = id;
+        CoTaskMemFree(id);
+        in.name = FriendlyName(device.Get());
+        in.isDefault = in.id == defaultId;
+        inputs_.push_back(std::move(in));
+    }
+    std::sort(inputs_.begin(), inputs_.end(),
+              [](const InputDevice& a, const InputDevice& b) { return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
+}
+
+bool AudioManager::SetDefaultDevice(const std::wstring& id) {
+    ComPtr<IPolicyConfig> policy;
+    if (FAILED(CoCreateInstance(kPolicyConfigClient, nullptr, CLSCTX_ALL, __uuidof(IPolicyConfig), (void**)&policy)))
+        return false;
+    bool ok = true;
+    for (ERole role : {eConsole, eMultimedia, eCommunications})
+        ok &= SUCCEEDED(policy->SetDefaultEndpoint(id.c_str(), role));
+    return ok;
 }
 
 void AudioManager::SetTrackSessions(bool track) {
@@ -286,6 +363,7 @@ void AudioManager::RefreshSessions() {
 }
 
 void AudioManager::LoadSessions(AudioDevice& d) {
+    d.playing = false;
     if (FAILED(d.device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_INPROC_SERVER, nullptr,
                                   (void**)d.sessionManager.ReleaseAndGetAddressOf())))
         return;
@@ -305,6 +383,7 @@ void AudioManager::LoadSessions(AudioDevice& d) {
 
         AudioSessionState state;
         if (FAILED(ctl->GetState(&state)) || state == AudioSessionStateExpired) continue;
+        if (state == AudioSessionStateActive) d.playing = true;
 
         bool isSystem = ctl2->IsSystemSoundsSession() == S_OK;
         DWORD pid = 0;

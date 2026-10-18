@@ -1,4 +1,5 @@
 #include "tapclient.h"
+#include "settings.h"
 
 namespace TapClient {
 
@@ -17,12 +18,54 @@ static bool IsLoaded(DWORD pid) {
     return true;
 }
 
+// The dll is embedded in the exe (resource 2) and written to
+// %LOCALAPPDATA%\VolumeOne\VolumeOneTap-<hash>.dll. explorer keeps it loaded
+// until it restarts, so every build gets its own file name and an update
+// never has to overwrite a locked file.
+static std::wstring ExtractDll() {
+    HRSRC res = FindResourceW(nullptr, MAKEINTRESOURCEW(2), RT_RCDATA);
+    HGLOBAL mem = res ? LoadResource(nullptr, res) : nullptr;
+    const BYTE* data = mem ? (const BYTE*)LockResource(mem) : nullptr;
+    DWORD size = res ? SizeofResource(nullptr, res) : 0;
+    if (!data || !size) return {};
+
+    UINT32 hash = 2166136261u;  // FNV-1a
+    for (DWORD i = 0; i < size; i++) hash = (hash ^ data[i]) * 16777619u;
+    wchar_t name[64];
+    swprintf_s(name, L"VolumeOneTap-%08x.dll", hash);
+
+    std::wstring dir = AppDataDir();
+    std::wstring path = dir + L"\\" + name;
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad) && fad.nFileSizeLow == size) return path;
+
+    std::wstring tmp = path + L".tmp";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return {};
+    DWORD written = 0;
+    BOOL ok = WriteFile(f, data, size, &written, nullptr) && written == size;
+    CloseHandle(f);
+    if (!ok || !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(tmp.c_str());
+        return {};
+    }
+
+    // Remove dlls of previous builds; the one explorer has loaded stays
+    // locked and is cleaned up on a later run.
+    WIN32_FIND_DATAW fd;
+    HANDLE find = FindFirstFileW((dir + L"\\VolumeOneTap-*.dll").c_str(), &fd);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            if (_wcsicmp(fd.cFileName, name) != 0) DeleteFileW((dir + L"\\" + fd.cFileName).c_str());
+        } while (FindNextFileW(find, &fd));
+        FindClose(find);
+    }
+    return path;
+}
+
 static bool Inject(DWORD pid) {
-    wchar_t path[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    if (!len || len >= MAX_PATH) return false;
-    PathRemoveFileSpecW(path);
-    if (!PathAppendW(path, TAP_DLL_NAME) || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return false;
+    std::wstring path = ExtractDll();
+    if (path.empty()) return false;
 
     using InitFn = HRESULT(WINAPI*)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, CLSID, LPCWSTR);
     HMODULE xaml = LoadLibraryExW(L"Windows.UI.Xaml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -32,7 +75,7 @@ static bool Inject(DWORD pid) {
 
     // The taskbar's XAML may not exist yet right after sign-in; the caller
     // retries until this succeeds.
-    HRESULT hr = init(L"VisualDiagConnection1", pid, nullptr, path, CLSID_VolumeOneTap, nullptr);
+    HRESULT hr = init(L"VisualDiagConnection1", pid, nullptr, path.c_str(), CLSID_VolumeOneTap, nullptr);
     return SUCCEEDED(hr);
 }
 

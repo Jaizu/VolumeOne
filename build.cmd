@@ -1,5 +1,5 @@
 @echo off
-rem Builds bin\VolumeOne.exe and bin\VolumeOneTap.dll with the MSVC toolchain.
+rem Builds bin\VolumeOne.exe (with the explorer dll embedded) using MSVC.
 setlocal
 cd /d "%~dp0"
 
@@ -24,17 +24,16 @@ if not exist obj mkdir obj
 set CFLAGS=/nologo /std:c++20 /O2 /GL /Gy /MT /EHsc /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE /DNDEBUG /Fo:obj\
 set LFLAGS=/LTCG /OPT:REF /OPT:ICF /INCREMENTAL:NO
 
-rc /nologo /fo obj\app.res res\app.rc || exit /b 1
-
-cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp obj\app.res ^
-   /Fe:bin\VolumeOne.exe /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
-   user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ^
-   windowscodecs.lib version.lib shcore.lib propsys.lib || exit /b 1
-
+rem The tap dll goes first: it is embedded in the exe as a resource.
 cl %CFLAGS% /LD src\tap\tap.cpp /Fe:obj\VolumeOneTap.dll /link %LFLAGS% /DEF:src\tap\tap.def ^
    user32.lib ole32.lib oleaut32.lib advapi32.lib windowsapp.lib || exit /b 1
 
-rem explorer keeps the dll loaded until it restarts, so it may be locked.
-copy /y obj\VolumeOneTap.dll bin\ >nul 2>nul || echo WARNING: bin\VolumeOneTap.dll is in use by explorer and was not replaced.
+rc /nologo /fo obj\app.res res\app.rc || exit /b 1
+
+cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp obj\app.res ^
+   /Fe:bin\VolumeOne.exe /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
+   user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ^
+   windowscodecs.lib version.lib shcore.lib propsys.lib winhttp.lib bcrypt.lib || exit /b 1
+
 echo.
-echo Built bin\VolumeOne.exe and bin\VolumeOneTap.dll
+echo Built bin\VolumeOne.exe

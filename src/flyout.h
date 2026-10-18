@@ -21,12 +21,21 @@ struct Palette {
     D2D1_COLOR_F tint;  // painted over the acrylic, like WinUI's acrylic tint layer
 };
 
+// Owned by the host; the flyout shows it and asks for checks/installs.
+struct UpdateState {
+    enum Status { Idle, Checking, UpToDate, Available, Failed, Installing, InstallFailed };
+    Status status = Idle;
+    std::wstring version;  // when Available
+};
+
 class Flyout {
 public:
     std::function<void()> onHideIconChanged;
     std::function<void()> onExit;
+    std::function<void()> onCheckUpdates;
+    std::function<void()> onInstallUpdate;
 
-    bool Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings);
+    bool Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings, const UpdateState* update);
     void Toggle();
     void Show(bool settingsView = false);
     void Hide();
@@ -37,10 +46,14 @@ public:
     void OnAudioStructureChanged();
     void OnVolumeChanged();
     void OnThemeChanged();
+    void OnUpdateStateChanged();
 
 private:
     enum class View { Mixer, Settings };
-    enum class HitKind { None, Mute, Slider, Gear, Back, SoundSettings, ToggleHideIcon, ToggleStartup, ToggleDevice, Exit };
+    enum class HitKind {
+        None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleHideIcon, ToggleStartup,
+        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Exit
+    };
     struct Hit {
         HitKind kind = HitKind::None;
         int device = -1;
@@ -64,6 +77,8 @@ private:
     void LayoutFooter(float top, bool draw);
     void Reposition(bool animate);
     std::vector<int> VisibleDevices();
+    bool IsExpanded(const AudioDevice& d) const;
+    void PickIcon(int device);
 
     // Drawing helpers (all coordinates in DIPs).
     void Fill(const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float radius = 0);
@@ -77,7 +92,10 @@ private:
     void Slider(const Hit& h, float cy, float value, bool muted, bool draw);
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
+    void DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c);
     ComPtr<ID2D1Bitmap> LoadIconBitmap(const std::wstring& path, int px);
+    ComPtr<ID2D1Bitmap> LoadImageBitmap(const std::wstring& path, int px);
+    ComPtr<ID2D1Bitmap> WicToD2D(IWICBitmapSource* src);
 
     Hit HitTest(float x, float y) const;
     void Activate(const Hit& h);
@@ -89,7 +107,10 @@ private:
     int slideDx_ = 0, slideDy_ = 1;  // direction the flyout slides in from
     AudioManager* audio_ = nullptr;
     Settings* settings_ = nullptr;
+    const UpdateState* update_ = nullptr;
     bool visible_ = false;
+    bool modal_ = false;  // a menu or file dialog is open: don't hide on deactivate
+    std::map<std::wstring, bool> expanded_;  // user's collapse/expand choices, by device id
     ULONGLONG lastHideTick_ = 0;
     View view_ = View::Mixer;
     bool startup_ = false;

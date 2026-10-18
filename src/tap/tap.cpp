@@ -124,10 +124,17 @@ void Evaluate(Tracked& t) {
 
     LOG(L"eval inCC=%d content=%d text=%04X", inControlCenter, (bool)content, tb.Text().empty() ? 0 : tb.Text()[0]);
     bool hide = g_hide && IsVolumeGlyph(tb.Text());
-    if (hide == t.hidden) return;
-    content.Visibility(hide ? wux::Visibility::Collapsed : wux::Visibility::Visible);
-    if (iconView) iconView.IsEnabled(!hide);
-    t.hidden = hide;
+    if (hide) {
+        // Check the real state, not just our flag: something else (e.g. a
+        // Windhawk mod unloading) may have made it visible again.
+        if (content.Visibility() != wux::Visibility::Collapsed) content.Visibility(wux::Visibility::Collapsed);
+        if (iconView && iconView.IsEnabled()) iconView.IsEnabled(false);
+        t.hidden = true;
+    } else if (t.hidden) {  // only undo what we did
+        content.Visibility(wux::Visibility::Visible);
+        if (iconView) iconView.IsEnabled(true);
+        t.hidden = false;
+    }
 }
 
 void SafeEvaluate(const std::shared_ptr<Tracked>& t) {

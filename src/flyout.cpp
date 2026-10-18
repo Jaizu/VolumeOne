@@ -3,6 +3,7 @@
 
 #include <shellscalingapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <cmath>
 
 static const float kWidth = 360.0f;
@@ -22,6 +23,10 @@ enum : wchar_t {
     kGlyphSettings = 0xE713,
     kGlyphBack = 0xE72B,
     kGlyphApp = 0xECAA,
+    kGlyphChevronDown = 0xE70D,
+    kGlyphChevronUp = 0xE70E,
+    kGlyphMicrophone = 0xE720,
+    kGlyphDownload = 0xE896,
 };
 
 static D2D1_COLOR_F Rgba(UINT rgb, float a = 1.0f) {
@@ -42,8 +47,9 @@ static bool IsFooterHit(int kind, int gear, int sound, int exit) { return kind =
 
 // ---------------------------------------------------------------------------
 
-bool Flyout::Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings) {
+bool Flyout::Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings, const UpdateState* update) {
     owner_ = owner;
+    update_ = update;
     audio_ = audio;
     settings_ = settings;
 
@@ -489,6 +495,68 @@ void Flyout::AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity) {
     }
 }
 
+ComPtr<ID2D1Bitmap> Flyout::WicToD2D(IWICBitmapSource* src) {
+    ComPtr<IWICFormatConverter> conv;
+    if (FAILED(wic_->CreateFormatConverter(&conv))) return nullptr;
+    if (FAILED(conv->Initialize(src, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                WICBitmapPaletteTypeCustom)))
+        return nullptr;
+    ComPtr<ID2D1Bitmap> bmp;
+    rt_->CreateBitmapFromWicBitmap(conv.Get(), nullptr, &bmp);
+    return bmp;
+}
+
+// Custom device icons: .ico (largest frame) or any image WIC can decode,
+// scaled to px.
+ComPtr<ID2D1Bitmap> Flyout::LoadImageBitmap(const std::wstring& path, int px) {
+    if (!wic_ && FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_))))
+        return nullptr;
+    ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(wic_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                               &decoder)))
+        return nullptr;
+    UINT frames = 0, best = 0, bestW = 0;
+    decoder->GetFrameCount(&frames);
+    for (UINT i = 0; i < frames; i++) {
+        ComPtr<IWICBitmapFrameDecode> f;
+        UINT w = 0, h = 0;
+        if (SUCCEEDED(decoder->GetFrame(i, &f)) && SUCCEEDED(f->GetSize(&w, &h)) && w > bestW) {
+            bestW = w;
+            best = i;
+        }
+    }
+    ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(best, &frame))) return nullptr;
+    ComPtr<IWICBitmapScaler> scaler;
+    if (FAILED(wic_->CreateBitmapScaler(&scaler)) ||
+        FAILED(scaler->Initialize(frame.Get(), px, px, WICBitmapInterpolationModeHighQualityCubic)))
+        return nullptr;
+    return WicToD2D(scaler.Get());
+}
+
+void Flyout::DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c) {
+    auto it = settings_->deviceIcons.find(d.id);
+    std::wstring v = it == settings_->deviceIcons.end() ? L"" : it->second;
+    wchar_t glyph = d.formFactor == FormFactor::Headphones ? kGlyphHeadphones : kGlyphSpeakers;
+    if (v == L"speakers") {
+        glyph = kGlyphSpeakers;
+    } else if (v == L"headphones") {
+        glyph = kGlyphHeadphones;
+    } else if (!v.empty()) {
+        int px = (int)std::lround(size * scale_ * 1.25f);
+        std::wstring key = L"img|" + v + L"|" + std::to_wstring(px);
+        auto ic = icons_.find(key);
+        if (ic == icons_.end()) ic = icons_.emplace(key, LoadImageBitmap(v, px)).first;
+        if (ic->second) {
+            float s = size * 1.25f, cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+            rt_->DrawBitmap(ic->second.Get(), {cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2}, c.a,
+                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            return;
+        }
+    }
+    Glyph(glyph, size, r, c);
+}
+
 // ---------------------------------------------------------------------------
 // Layout. The same code measures (draw == false) and paints, so hit testing
 // always matches what is on screen.
@@ -510,6 +578,32 @@ float Flyout::LayoutMixer(float y, bool draw) {
     auto visible = VisibleDevices();
     y += 12;
 
+    // Update banner.
+    if (update_ && (update_->status == UpdateState::Available || update_->status == UpdateState::Installing ||
+                    update_->status == UpdateState::InstallFailed)) {
+        const float h = 52;
+        bool installing = update_->status == UpdateState::Installing;
+        const wchar_t* label = installing ? S().updating
+                               : update_->status == UpdateState::InstallFailed ? S().updateFailed
+                                                                                : S().updateNow;
+        float bw = TextWidth(label, fBody_.Get()) + 28;
+        Hit btn{HitKind::InstallUpdate, -1, -1, {x1 - 10 - bw, y + 10, x1 - 10, y + 42}};
+        if (!installing) hits_.push_back(btn);
+        if (draw) {
+            Fill({x0, y, x1, y + h}, pal_.card, 8);
+            Stroke({x0, y, x1, y + h}, pal_.cardStroke, 8);
+            Glyph(kGlyphDownload, 16, {x0 + 12, y, x0 + 40, y + h}, pal_.accent);
+            Text(std::wstring(S().updateAvailable) + update_->version, fBody_.Get(), {x0 + 46, y, btn.rect.left - 8, y + h},
+                 pal_.text);
+            D2D1_COLOR_F fill = pal_.accent;
+            if (installing) fill.a = 0.5f;
+            else if (hover_ == btn) fill.a = pressed_ == btn ? 0.8f : 0.9f;
+            Fill(btn.rect, fill, 4);
+            Text(label, fBody_.Get(), btn.rect, pal_.onAccent, DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        y += h + 8;
+    }
+
     if (visible.empty()) {
         if (draw) Text(S().noDevices, fBody_.Get(), {x0, y, x1, y + 72}, pal_.textSecondary, DWRITE_TEXT_ALIGNMENT_CENTER);
         return y + 72 + 12;
@@ -517,18 +611,33 @@ float Flyout::LayoutMixer(float y, bool draw) {
 
     for (int di : visible) {
         AudioDevice& d = devices[di];
+        bool expanded = IsExpanded(d);
         float top = y;
-        float h = 12 + 24 + 40 + (d.apps.empty() ? 0 : 8 + 48.0f * d.apps.size()) + 8;
+        float h = expanded ? 12 + 24 + 40 + (d.apps.empty() ? 0 : 8 + 48.0f * d.apps.size()) + 8 : 44;
         if (draw) {
             Fill({x0, top, x1, top + h}, pal_.card, 8);
             Stroke({x0, top, x1, top + h}, pal_.cardStroke, 8);
         }
 
+        // Header: click to collapse/expand.
+        Hit header{HitKind::Collapse, di, -1, {x0 + 1, top + 1, x1 - 1, top + (expanded ? 36.0f : 43.0f)}};
+        Button(header, draw, 7);
         float cy = top + 12;
         if (draw) {
-            Glyph(d.formFactor == FormFactor::Headphones ? kGlyphHeadphones : kGlyphSpeakers, 16,
-                  {x0 + 12, cy, x0 + 40, cy + 20}, pal_.textSecondary);
-            Text(d.name, fTitle_.Get(), {x0 + 46, cy, x1 - 14, cy + 20}, pal_.text);
+            DeviceIcon(d, {x0 + 12, cy, x0 + 40, cy + 20}, 16, pal_.textSecondary);
+            Text(d.name, fTitle_.Get(), {x0 + 46, cy, x1 - (expanded ? 40 : 84), cy + 20}, pal_.text);
+            if (!expanded) {
+                if (d.muted)
+                    Glyph(kGlyphMute, 14, {x1 - 80, cy, x1 - 40, cy + 20}, pal_.textSecondary);
+                else
+                    Text(Percent(d.volume), fBody_.Get(), {x1 - 80, cy, x1 - 40, cy + 20}, pal_.textSecondary,
+                         DWRITE_TEXT_ALIGNMENT_TRAILING);
+            }
+            Glyph(expanded ? kGlyphChevronUp : kGlyphChevronDown, 12, {x1 - 36, cy, x1 - 12, cy + 20}, pal_.textSecondary);
+        }
+        if (!expanded) {
+            y = top + h + 8;
+            continue;
         }
         cy += 24;
 
@@ -576,6 +685,19 @@ float Flyout::LayoutSettings(float y, bool draw) {
     }
     y += 52;
 
+    auto card = [&](float top, float h) {
+        if (!draw || h <= 0) return;
+        Fill({x0, top, x1, top + h}, pal_.card, 8);
+        Stroke({x0, top, x1, top + h}, pal_.cardStroke, 8);
+    };
+    auto section = [&](const wchar_t* title, const wchar_t* desc) {
+        if (draw) Text(title, fTitle_.Get(), {x0 + 4, y, x1, y + 20}, pal_.text);
+        y += 22;
+        float dh = TextHeight(desc, fDesc_.Get(), x1 - x0 - 8);
+        if (draw) Text(desc, fDesc_.Get(), {x0 + 4, y, x1 - 4, y + dh}, pal_.textSecondary);
+        y += dh + 8;
+    };
+
     // General toggles.
     struct Row { HitKind kind; const wchar_t* label; const wchar_t* desc; bool on; };
     Row rows[] = {
@@ -588,10 +710,7 @@ float Flyout::LayoutSettings(float y, bool draw) {
         heights[i] = 12 + 20 + TextHeight(rows[i].desc, fDesc_.Get(), textR - textX) + 12;
         cardH += heights[i];
     }
-    if (draw) {
-        Fill({x0, y, x1, y + cardH}, pal_.card, 8);
-        Stroke({x0, y, x1, y + cardH}, pal_.cardStroke, 8);
-    }
+    card(y, cardH);
     float ry = y;
     for (int i = 0; i < 2; i++) {
         Hit h{rows[i].kind, -1, -1, {x0, ry, x1, ry + heights[i]}};
@@ -605,34 +724,88 @@ float Flyout::LayoutSettings(float y, bool draw) {
     }
     y += cardH + 20;
 
-    // Output devices.
-    if (draw) Text(S().outputDevices, fTitle_.Get(), {x0 + 4, y, x1, y + 20}, pal_.text);
-    y += 22;
-    float descH = TextHeight(S().outputDevicesDesc, fDesc_.Get(), x1 - x0 - 8);
-    if (draw) Text(S().outputDevicesDesc, fDesc_.Get(), {x0 + 4, y, x1 - 4, y + descH}, pal_.textSecondary);
-    y += descH + 8;
-
+    // Output devices: icon button + visibility toggle.
+    section(S().outputDevices, S().outputDevicesDesc);
     auto& devices = audio_->Devices();
     float devH = 48.0f * devices.size();
-    if (draw && !devices.empty()) {
-        Fill({x0, y, x1, y + devH}, pal_.card, 8);
-        Stroke({x0, y, x1, y + devH}, pal_.cardStroke, 8);
-    }
+    card(y, devH);
     for (int i = 0; i < (int)devices.size(); i++) {
         const AudioDevice& d = devices[i];
         float top = y + 48.0f * i;
         bool shown = !settings_->IsDeviceHidden(d.id);
-        Hit h{HitKind::ToggleDevice, i, -1, {x0, top, x1, top + 48}};
+        D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
+        Hit icon{HitKind::IconPick, i, -1, {x0 + 4, top + 4, x0 + 44, top + 44}};
+        Button(icon, draw);
+        Hit h{HitKind::ToggleDevice, i, -1, {x0 + 46, top, x1, top + 48}};
         ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
         if (draw) {
             if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
-            D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
-            Glyph(d.formFactor == FormFactor::Headphones ? kGlyphHeadphones : kGlyphSpeakers, 16,
-                  {x0 + 10, top, x0 + 42, top + 48}, c);
-            Text(d.name, fBody_.Get(), {x0 + 48, top, x1 - 72, top + 48}, c);
+            DeviceIcon(d, icon.rect, 16, c);
+            Text(d.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
         }
     }
-    y += devH + 12;
+    y += devH + 20;
+
+    // Input devices: visibility in the right-click menu.
+    section(S().inputDevices, S().inputDevicesDesc);
+    auto& inputs = audio_->Inputs();
+    float inH = 48.0f * inputs.size();
+    card(y, inH);
+    for (int i = 0; i < (int)inputs.size(); i++) {
+        const InputDevice& in = inputs[i];
+        float top = y + 48.0f * i;
+        bool shown = !settings_->IsDeviceHidden(in.id);
+        D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
+        Hit h{HitKind::ToggleInput, i, -1, {x0, top, x1, top + 48}};
+        ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
+        if (draw) {
+            if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
+            Glyph(kGlyphMicrophone, 16, {x0 + 4, top + 4, x0 + 44, top + 44}, c);
+            Text(in.name, fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
+        }
+    }
+    y += inH + 20;
+
+    // Updates.
+    {
+        std::wstring status = L"VolumeOne " APP_VERSION;
+        const wchar_t* button = S().checkUpdates;
+        HitKind kind = HitKind::CheckUpdates;
+        bool enabled = true;
+        switch (update_ ? update_->status : UpdateState::Idle) {
+            case UpdateState::Checking: status += std::wstring(L" · ") + S().checking; enabled = false; break;
+            case UpdateState::UpToDate: status += std::wstring(L" · ") + S().upToDate; break;
+            case UpdateState::Failed: status += std::wstring(L" · ") + S().checkFailed; break;
+            case UpdateState::Available:
+            case UpdateState::InstallFailed:
+                status += std::wstring(L" · ") + S().updateAvailable + update_->version;
+                button = S().updateNow;
+                kind = HitKind::InstallUpdate;
+                break;
+            case UpdateState::Installing:
+                status += std::wstring(L" · ") + S().updating;
+                enabled = false;
+                break;
+            default: break;
+        }
+        float bw = TextWidth(button, fBody_.Get()) + 28;
+        const float h = 64;
+        card(y, h);
+        Hit btn{kind, -1, -1, {x1 - 12 - bw, y + 16, x1 - 12, y + 48}};
+        if (enabled) Button(btn, false);
+        if (draw) {
+            Text(S().updates, fBody_.Get(), {x0 + 16, y + 12, btn.rect.left - 8, y + 32}, pal_.text);
+            Text(status, fCaption_.Get(), {x0 + 16, y + 32, btn.rect.left - 8, y + 50}, pal_.textSecondary);
+            bool accent = kind == HitKind::InstallUpdate;
+            D2D1_COLOR_F fill = accent ? pal_.accent : pal_.card;
+            if (!enabled) fill.a *= 0.5f;
+            else if (hover_ == btn) fill = accent ? D2D1::ColorF(fill.r, fill.g, fill.b, 0.9f) : pal_.subtleHover;
+            Fill(btn.rect, fill, 4);
+            if (!accent) Stroke(btn.rect, pal_.cardStroke, 4);
+            Text(button, fBody_.Get(), btn.rect, accent ? pal_.onAccent : pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        y += h + 12;
+    }
     return y;
 }
 
@@ -708,6 +881,77 @@ void Flyout::AdjustSlider(const Hit& h, float delta) {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+bool Flyout::IsExpanded(const AudioDevice& d) const {
+    auto it = expanded_.find(d.id);
+    if (it != expanded_.end()) return it->second;
+    return d.isDefault || d.playing;  // inactive devices start collapsed
+}
+
+void Flyout::PickIcon(int device) {
+    auto& devices = audio_->Devices();
+    if (device < 0 || device >= (int)devices.size()) return;
+    const std::wstring id = devices[device].id;
+    auto it = settings_->deviceIcons.find(id);
+    std::wstring current = it == settings_->deviceIcons.end() ? L"" : it->second;
+    bool custom = !current.empty() && current != L"speakers" && current != L"headphones";
+
+    enum { IdAuto = 1, IdSpeakers, IdHeadphones, IdCustom };
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING | (current.empty() ? MF_CHECKED : 0), IdAuto, S().iconAuto);
+    AppendMenuW(menu, MF_STRING | (current == L"speakers" ? MF_CHECKED : 0), IdSpeakers, S().iconSpeakers);
+    AppendMenuW(menu, MF_STRING | (current == L"headphones" ? MF_CHECKED : 0), IdHeadphones, S().iconHeadphones);
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | (custom ? MF_CHECKED : 0), IdCustom, S().iconCustom);
+
+    modal_ = true;
+    POINT pt;
+    GetCursorPos(&pt);
+    int cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, hwnd_, nullptr);
+    DestroyMenu(menu);
+
+    std::wstring value = current;
+    if (cmd == IdAuto) value.clear();
+    if (cmd == IdSpeakers) value = L"speakers";
+    if (cmd == IdHeadphones) value = L"headphones";
+    if (cmd == IdCustom) {
+        ComPtr<IFileOpenDialog> dlg;
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) {
+            COMDLG_FILTERSPEC filter = {S().iconFiles, L"*.ico;*.png;*.jpg;*.jpeg;*.bmp"};
+            dlg->SetFileTypes(1, &filter);
+            ComPtr<IShellItem> item;
+            PWSTR path = nullptr;
+            if (SUCCEEDED(dlg->Show(hwnd_)) && SUCCEEDED(dlg->GetResult(&item)) &&
+                SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                // Keep our own copy so the icon survives the original being
+                // moved or deleted.
+                UINT32 hash = 2166136261u;
+                for (wchar_t ch : id) hash = (hash ^ ch) * 16777619u;
+                wchar_t name[64];
+                swprintf_s(name, L"%08x-%llx", hash, (unsigned long long)GetTickCount64());
+                std::wstring dest = AppDataDir(L"icons") + L"\\" + name + PathFindExtensionW(path);
+                if (CopyFileW(path, dest.c_str(), FALSE)) value = dest;
+                CoTaskMemFree(path);
+            }
+        }
+        SetForegroundWindow(hwnd_);
+    }
+    modal_ = false;
+
+    if (value != current) {
+        if (custom) DeleteFileW(current.c_str());  // our copy of the previous custom icon
+        if (value.empty())
+            settings_->deviceIcons.erase(id);
+        else
+            settings_->deviceIcons[id] = value;
+        settings_->Save();
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void Flyout::OnUpdateStateChanged() {
+    if (visible_) Reposition(false);
+}
+
 void Flyout::Activate(const Hit& h) {
     auto& devices = audio_->Devices();
     switch (h.kind) {
@@ -718,6 +962,14 @@ void Flyout::Activate(const Hit& h) {
                     audio_->SetDeviceMute(d, !d.muted);
                 else if (h.app < (int)d.apps.size())
                     audio_->SetAppMute(d.apps[h.app], !d.apps[h.app].muted);
+            }
+            break;
+        case HitKind::Collapse:
+            if (h.device >= 0 && h.device < (int)devices.size()) {
+                const AudioDevice& d = devices[h.device];
+                expanded_[d.id] = !IsExpanded(d);
+                hover_ = Hit{};
+                Reposition(false);
             }
             break;
         case HitKind::Gear:
@@ -751,6 +1003,24 @@ void Flyout::Activate(const Hit& h) {
                 settings_->Save();
             }
             break;
+        case HitKind::ToggleInput: {
+            auto& inputs = audio_->Inputs();
+            if (h.device >= 0 && h.device < (int)inputs.size()) {
+                const std::wstring& id = inputs[h.device].id;
+                settings_->SetDeviceHidden(id, !settings_->IsDeviceHidden(id));
+                settings_->Save();
+            }
+            break;
+        }
+        case HitKind::IconPick:
+            PickIcon(h.device);
+            return;
+        case HitKind::CheckUpdates:
+            if (onCheckUpdates) onCheckUpdates();
+            break;
+        case HitKind::InstallUpdate:
+            if (onInstallUpdate) onInstallUpdate();
+            break;
         case HitKind::Exit:
             if (onExit) onExit();
             return;
@@ -773,7 +1043,7 @@ LRESULT CALLBACK Flyout::WndProcThunk(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_ACTIVATE:
-            if (LOWORD(wp) == WA_INACTIVE) Hide();
+            if (LOWORD(wp) == WA_INACTIVE && !modal_) Hide();
             return 0;
 
         case WM_PAINT: {
