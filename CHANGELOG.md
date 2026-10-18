@@ -4,8 +4,17 @@ All notable changes to VolumeOne. Each version's section is used as the notes of
 
 ## Unreleased
 
+### New
+- **Use the Windows volume icon** (Settings): instead of a separate tray icon, the original volume icon in the taskbar opens VolumeOne. Left-click opens the mixer, right-click the menu, middle-click mutes and the mouse wheel changes the volume. Hovering it highlights the whole Quick Settings button, like the network icon.
+- **Remove volume from Quick Settings** (Settings): hides the volume slider in the Windows Quick Settings panel while VolumeOne is running. On laptops the brightness slider stays.
+
+### Changed
+- The level meter on the sliders is thicker than the track and a solid lighter shade of the accent colour, so it's easier to see.
+
 ### Fixed
 - The header of an expanded device is now the same height as a collapsed one, so its hover highlight is centred on the name and icon.
+- The flyout closes when you click anywhere else, also when it was opened from the Windows volume icon (it didn't, because Windows doesn't give it the focus in that case).
+- The right-click menu opened from the Windows volume icon is placed above the taskbar instead of partly behind it.
 
 ## 1.2.0
 

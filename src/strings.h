@@ -7,6 +7,10 @@
 struct Strings {
     const wchar_t* settings;
     const wchar_t* back;
+    const wchar_t* useSystemIcon;
+    const wchar_t* useSystemIconDesc;
+    const wchar_t* hideQsVolume;
+    const wchar_t* hideQsVolumeDesc;
     const wchar_t* hideSystemIcon;
     const wchar_t* hideSystemIconDesc;
     const wchar_t* startWithWindows;
@@ -46,6 +50,10 @@ inline const Strings& S() {
     static const Strings es = {
         L"Configuración",
         L"Atrás",
+        L"Usar el icono de volumen de Windows",
+        L"Al pulsar el icono original de la barra de tareas se abre VolumeOne, sin icono propio en la bandeja",
+        L"Quitar el volumen de los Ajustes rápidos",
+        L"Oculta el control de volumen del panel de Ajustes rápidos de Windows mientras VolumeOne está abierto",
         L"Ocultar el icono de volumen de Windows",
         L"Quita el icono de volumen de la barra de tareas mientras VolumeOne está abierto",
         L"Iniciar con Windows",
@@ -83,6 +91,10 @@ inline const Strings& S() {
     static const Strings en = {
         L"Settings",
         L"Back",
+        L"Use the Windows volume icon",
+        L"Clicking the original taskbar icon opens VolumeOne, with no separate tray icon",
+        L"Remove volume from Quick Settings",
+        L"Hides the volume control in the Windows Quick Settings panel while VolumeOne is running",
         L"Hide the Windows volume icon",
         L"Removes the volume icon from the taskbar while VolumeOne is running",
         L"Start with Windows",

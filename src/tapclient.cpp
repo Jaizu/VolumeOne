@@ -1,6 +1,8 @@
 #include "tapclient.h"
 #include "settings.h"
 
+#include <tlhelp32.h>
+
 namespace TapClient {
 
 static DWORD ExplorerPid() {
@@ -79,23 +81,44 @@ static bool Inject(DWORD pid) {
     return SUCCEEDED(hr);
 }
 
-bool Sync(bool hide) {
-    DWORD pid = ExplorerPid();
-    if (!pid) return false;
-    if (!IsLoaded(pid)) {
-        if (!hide) return true;  // nothing to restore
-        if (!Inject(pid)) return false;
+// The Quick Settings panel lives in ShellHost.exe (one per session).
+static DWORD ShellHostPid() {
+    DWORD session = 0, pid = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    PROCESSENTRY32W pe = {sizeof(pe)};
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        DWORD s = 0;
+        if (_wcsicmp(pe.szExeFile, L"ShellHost.exe") == 0 && ProcessIdToSessionId(pe.th32ProcessID, &s) && s == session) {
+            pid = pe.th32ProcessID;
+            break;
+        }
     }
-    Notify();
-    return true;
+    CloseHandle(snap);
+    return pid;
 }
 
-void Notify() {
-    HANDLE ev = OpenEventW(EVENT_MODIFY_STATE, FALSE, TAP_REFRESH_EVENT_NAME);
-    if (ev) {
+static bool SyncProcess(DWORD pid, bool needed) {
+    if (!pid) return !needed;
+    if (!IsLoaded(pid)) {
+        if (!needed) return true;  // nothing to restore
+        if (!Inject(pid)) return false;
+    }
+    std::wstring name = TAP_REFRESH_PREFIX + std::to_wstring(pid);
+    if (HANDLE ev = OpenEventW(EVENT_MODIFY_STATE, FALSE, name.c_str())) {
         SetEvent(ev);
         CloseHandle(ev);
     }
+    return true;
 }
+
+bool Sync(bool explorer, bool shellHost) {
+    bool ok = SyncProcess(ExplorerPid(), explorer);
+    ok &= SyncProcess(ShellHostPid(), shellHost);
+    return ok;
+}
+
+void Notify() { Sync(false, false); }
 
 }  // namespace TapClient

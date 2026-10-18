@@ -9,6 +9,25 @@
 static const float kWidth = 360.0f;
 static const float kFooterHeight = 52.0f;
 static const UINT_PTR kMeterTimer = 1;
+static const UINT WM_OUTSIDE_CLICK = WM_APP + 100;
+
+// While the flyout is open, a low-level mouse hook closes it on a click
+// anywhere else. Losing activation isn't enough: when it is opened from the
+// Windows volume icon, explorer keeps the foreground and the flyout is never
+// activated, so it would never get WA_INACTIVE.
+static Flyout* g_hookOwner = nullptr;
+static HHOOK g_mouseHook = nullptr;
+
+static LRESULT CALLBACK MouseHook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION && g_hookOwner &&
+        (wp == WM_LBUTTONDOWN || wp == WM_RBUTTONDOWN || wp == WM_MBUTTONDOWN || wp == WM_XBUTTONDOWN)) {
+        auto info = (MSLLHOOKSTRUCT*)lp;
+        RECT rc;
+        HWND hwnd = g_hookOwner->Hwnd();
+        if (GetWindowRect(hwnd, &rc) && !PtInRect(&rc, info->pt)) PostMessageW(hwnd, WM_OUTSIDE_CLICK, 0, 0);
+    }
+    return CallNextHookEx(g_mouseHook, code, wp, lp);
+}
 static const wchar_t kTextFont[] = L"Segoe UI Variable Text";
 static const wchar_t kIconFont[] = L"Segoe Fluent Icons";
 
@@ -114,7 +133,6 @@ void Flyout::LoadPalette() {
         p.toggleOffFill = Rgba(0x000000, 0.10f);
         p.tint = Rgba(0x202020, 0.82f);
         p.textDisabled = Rgba(0xFFFFFF, 0.3f);
-        p.meter = Rgba(0xFFFFFF, 0.55f);
     } else {
         p.text = Rgba(0x000000, 0.894f);
         p.textSecondary = Rgba(0x000000, 0.606f);
@@ -132,8 +150,12 @@ void Flyout::LoadPalette() {
         p.toggleOffFill = Rgba(0x000000, 0.0241f);
         p.tint = Rgba(0xF3F3F3, 0.82f);
         p.textDisabled = Rgba(0x000000, 0.25f);
-        p.meter = Rgba(0xFFFFFF, 0.55f);
     }
+    // Level meter: the accent mixed towards white, solid, so it stands out
+    // against the filled part of the slider in both themes.
+    float mix = dark ? 0.6f : 0.5f;
+    p.meter = D2D1::ColorF(accent.r + (1 - accent.r) * mix, accent.g + (1 - accent.g) * mix,
+                           accent.b + (1 - accent.b) * mix, 1.0f);
     pal_ = p;
 }
 
@@ -250,12 +272,21 @@ void Flyout::Show(bool settingsView) {
     }
     if (visible_)
         SetWindowPos(hwnd_, nullptr, final.left, final.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (visible_ && !g_mouseHook) {
+        g_hookOwner = this;
+        g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, GetModuleHandleW(nullptr), 0);
+    }
 }
 
 void Flyout::Hide() {
     if (!visible_) return;
     visible_ = false;
     KillTimer(hwnd_, kMeterTimer);
+    if (g_mouseHook) {
+        UnhookWindowsHookEx(g_mouseHook);
+        g_mouseHook = nullptr;
+        g_hookOwner = nullptr;
+    }
     dragging_ = false;
     lastHideTick_ = GetTickCount64();
     ShowWindow(hwnd_, SW_HIDE);
@@ -422,9 +453,10 @@ void Flyout::Slider(const Hit& h, float cy, float value, bool muted, float peak,
 
     Fill({x0, cy - 2, x1, cy + 2}, pal_.trackOff, 2);
     if (tx > x0 + 1) Fill({x0, cy - 2, tx, cy + 2}, fill, 2);
-    // Level meter: a lighter band over the filled part, like EarTrumpet.
-    float px = x0 + std::clamp(peak, 0.0f, 1.0f) * (x1 - x0);
-    if (px > x0 + 1) Fill({x0, cy - 2, std::min(px, tx), cy + 2}, pal_.meter, 2);
+    // Level meter: a lighter band, thicker than the track, over the filled
+    // part (like EarTrumpet).
+    float px = std::min(x0 + std::clamp(peak, 0.0f, 1.0f) * (x1 - x0), tx);
+    if (px > x0 + 1) Fill({x0, cy - 3, px, cy + 3}, pal_.meter, 3);
 
     // Thumb: neutral outer disc with an accent dot that grows on hover and
     // shrinks while pressed, like the WinUI slider.
@@ -720,25 +752,37 @@ float Flyout::LayoutSettings(float y, bool draw) {
     };
 
     // General toggles.
-    struct Row { HitKind kind; const wchar_t* label; const wchar_t* desc; bool on; };
+    struct Row { HitKind kind; const wchar_t* label; const wchar_t* desc; bool on; bool enabled; };
+    bool useSystem = settings_->useSystemVolumeIcon;
     Row rows[] = {
-        {HitKind::ToggleHideIcon, S().hideSystemIcon, S().hideSystemIconDesc, settings_->hideSystemVolumeIcon},
-        {HitKind::ToggleStartup, S().startWithWindows, S().startWithWindowsDesc, startup_},
+        {HitKind::ToggleUseSystemIcon, S().useSystemIcon, S().useSystemIconDesc, useSystem, true},
+        // Hiding the Windows icon makes no sense while it is VolumeOne's icon.
+        {HitKind::ToggleHideIcon, S().hideSystemIcon, S().hideSystemIconDesc, settings_->hideSystemVolumeIcon && !useSystem,
+         !useSystem},
+        {HitKind::ToggleHideQs, S().hideQsVolume, S().hideQsVolumeDesc, settings_->hideQuickSettingsVolume, true},
+        {HitKind::ToggleStartup, S().startWithWindows, S().startWithWindowsDesc, startup_, true},
     };
+    const int rowCount = ARRAYSIZE(rows);
     const float textX = x0 + 16, textR = x1 - 16 - 40 - 16;
-    float heights[2], cardH = 0;
-    for (int i = 0; i < 2; i++) {
+    float heights[ARRAYSIZE(rows)], cardH = 0;
+    for (int i = 0; i < rowCount; i++) {
         heights[i] = 12 + 20 + TextHeight(rows[i].desc, fDesc_.Get(), textR - textX) + 12;
         cardH += heights[i];
     }
     card(y, cardH);
     float ry = y;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < rowCount; i++) {
+        if (draw && !rows[i].enabled)
+            rt_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                 D2D1::IdentityMatrix(), 0.4f),
+                           nullptr);
         Hit h{rows[i].kind, -1, -1, {x0, ry, x1, ry + heights[i]}};
         ToggleSwitch(h, x1 - 16 - 40, ry + heights[i] / 2, rows[i].on, draw);
+        if (!rows[i].enabled) hits_.pop_back();
         if (draw) {
             Text(rows[i].label, fBody_.Get(), {textX, ry + 12, textR, ry + 32}, pal_.text);
             Text(rows[i].desc, fDesc_.Get(), {textX, ry + 32, textR, ry + heights[i]}, pal_.textSecondary);
+            if (!rows[i].enabled) rt_->PopLayer();
             if (i > 0) Fill({x0 + 1, ry, x1 - 1, ry + 1}, pal_.divider);
         }
         ry += heights[i];
@@ -1026,6 +1070,16 @@ void Flyout::Activate(const Hit& h) {
             settings_->Save();
             if (onHideIconChanged) onHideIconChanged();
             break;
+        case HitKind::ToggleHideQs:
+            settings_->hideQuickSettingsVolume = !settings_->hideQuickSettingsVolume;
+            settings_->Save();
+            if (onHideIconChanged) onHideIconChanged();
+            break;
+        case HitKind::ToggleUseSystemIcon:
+            settings_->useSystemVolumeIcon = !settings_->useSystemVolumeIcon;
+            settings_->Save();
+            if (onHideIconChanged) onHideIconChanged();
+            break;
         case HitKind::ToggleStartup:
             startup_ = !startup_;
             SetStartWithWindows(startup_);
@@ -1089,6 +1143,10 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_OUTSIDE_CLICK:
+            if (!modal_) Hide();  // menus and the file dialog are outside the flyout too
+            return 0;
 
         case WM_TIMER:
             if (wp == kMeterTimer && visible_ && view_ == View::Mixer && audio_->UpdatePeaks())

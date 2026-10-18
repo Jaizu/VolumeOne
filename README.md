@@ -12,6 +12,8 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Hide devices** you don't want to see (for example bass shakers for sim racing), for outputs and inputs. Settings → Output devices / Input devices
 - **Device icons**: pick speakers, headphones or your own `.ico`/`.png` per output device (click the icon in Settings). Custom icons are copied to `%LOCALAPPDATA%\VolumeOne\icons`, so they keep working if you delete the original
 - **Switch the default microphone** from the tray icon's right-click menu
+- **Use the Windows volume icon** instead of a separate tray icon (toggle): the original taskbar icon opens VolumeOne (left-click mixer, right-click menu, middle-click mute, wheel for volume)
+- **Remove the volume slider from Quick Settings** (toggle)
 - **Hide the Windows volume icon** from the taskbar (toggle). This replaces the Windhawk mod *taskbar-tray-system-icon-tweaks → hideVolumeIcon*. The icon comes back when you turn the toggle off or quit VolumeOne
 - **Start with Windows** (toggle)
 - **Built-in updater**: checks GitHub releases at startup and once a day, and updates itself in place
@@ -43,6 +45,6 @@ Output: `bin\VolumeOne.exe`. The version lives in `src\version.h`; a release is 
 
 ## How hiding the Windows volume icon works
 
-The taskbar's tray is XAML inside `explorer.exe`. VolumeOne embeds a small dll, writes it to `%LOCALAPPDATA%\VolumeOne` and loads it into explorer with `InitializeXamlDiagnosticsEx` (the documented XAML diagnostics API that TranslucentTB also uses). The dll watches the visual tree and collapses the volume glyph inside the Quick Settings button, the same elements the Windhawk mod hides. Nothing is patched on disk. The dll stays loaded until explorer restarts; each build uses its own file name, so updates never collide with the loaded one.
+The taskbar's tray is XAML inside `explorer.exe`. VolumeOne embeds a small dll, writes it to `%LOCALAPPDATA%\VolumeOne` and loads it into explorer with `InitializeXamlDiagnosticsEx` (the documented XAML diagnostics API that TranslucentTB also uses). The dll watches the visual tree and collapses the volume glyph inside the Quick Settings button, the same elements the Windhawk mod hides. Nothing is patched on disk. In "use the Windows icon" mode it instead lays a transparent popup over the volume icon, so its clicks reach VolumeOne and not the Quick Settings button. The same dll is loaded into `ShellHost.exe` (the Quick Settings panel) to hide its volume slider. The dll stays loaded until explorer restarts; each build uses its own file name, so updates never collide with the loaded one.
 
 Settings live in `HKCU\Software\VolumeOne`. Start with Windows uses `HKCU\...\Run`.

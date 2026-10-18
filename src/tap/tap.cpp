@@ -1,8 +1,9 @@
 // VolumeOneTap.dll: loaded into explorer.exe by VolumeOne through
-// InitializeXamlDiagnosticsEx. It watches the taskbar's XAML tree and
-// collapses the volume glyph inside the Quick Settings tray button (the one
-// that also shows network/battery), exactly what the Windhawk mod
-// "taskbar-tray-system-icon-tweaks" does with hideVolumeIcon.
+// InitializeXamlDiagnosticsEx. It watches the taskbar's XAML tree for the
+// volume glyph inside the Quick Settings tray button (the one that also shows
+// network/battery) and, depending on VolumeOne's settings, either collapses it
+// (what the Windhawk mod "taskbar-tray-system-icon-tweaks" does with
+// hideVolumeIcon) or keeps it and forwards its clicks to VolumeOne.
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -17,7 +18,11 @@
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.Input.h>
+#include <winrt/Windows.UI.h>
 
 #include <atomic>
 #include <cstdarg>
@@ -42,7 +47,9 @@ struct Tracked {
 
 std::mutex g_lock;
 std::vector<std::shared_ptr<Tracked>> g_tracked;
-std::atomic<bool> g_hide{false};
+std::atomic<bool> g_hide{false};       // collapse the Windows volume icon
+std::atomic<bool> g_intercept{false};  // keep it, but send its clicks to VolumeOne
+std::atomic<bool> g_hideQs{false};     // hide the Quick Settings volume slider
 winrt::com_ptr<IXamlDiagnostics> g_diag;
 HANDLE g_refreshEvent = nullptr;
 HANDLE g_loadedEvent = nullptr;
@@ -68,25 +75,44 @@ void Log(const wchar_t* fmt, ...) {
 #define LOG(...) ((void)0)
 #endif
 
-bool ShouldHide() {
-    if (!FindWindowW(HOST_WINDOW_CLASS, nullptr)) return false;
+DWORD ReadDword(const wchar_t* name) {
     DWORD value = 0, size = sizeof(value);
-    LSTATUS st = RegGetValueW(HKEY_CURRENT_USER, REG_KEY_PATH, REG_HIDE_ICON, RRF_RT_REG_DWORD, nullptr, &value, &size);
-    LOG(L"ShouldHide: window found, reg status=%ld value=%lu", st, value);
-    (void)st;
-    return value != 0;
+    RegGetValueW(HKEY_CURRENT_USER, REG_KEY_PATH, name, RRF_RT_REG_DWORD, nullptr, &value, &size);
+    return value;
+}
+
+// Re-reads what VolumeOne wants. Nothing happens while it isn't running, so
+// quitting it gives Windows its icon back.
+void ReadState() {
+    bool running = FindWindowW(HOST_WINDOW_CLASS, nullptr) != nullptr;
+    bool useSystem = running && ReadDword(REG_USE_SYSTEM_ICON) != 0;
+    g_intercept = useSystem;
+    g_hide = running && !useSystem && ReadDword(REG_HIDE_ICON) != 0;
+    g_hideQs = running && ReadDword(REG_HIDE_QS_VOLUME) != 0;
+    LOG(L"ReadState: running=%d hide=%d intercept=%d", running, (bool)g_hide, (bool)g_intercept);
+}
+
+void PostToHost(WPARAM what, LPARAM lp = 0) {
+    HWND host = FindWindowW(HOST_WINDOW_CLASS, nullptr);
+    if (!host) return;
+    // explorer has the foreground right now (the user clicked the taskbar);
+    // pass it on so VolumeOne's flyout or menu can take focus.
+    DWORD pid = 0;
+    GetWindowThreadProcessId(host, &pid);
+    AllowSetForegroundWindow(pid);
+    PostMessageW(host, WM_VOLUMEONE_SYSICON, what, lp);
 }
 
 bool IsVolumeGlyph(const winrt::hstring& text) {
     if (text.size() != 1) return false;
     switch (text[0]) {
-        case L'':  // Mute
-        case L'':  // Volume0
-        case L'':  // Volume1
-        case L'':  // Volume2
-        case L'':  // Volume3
-        case L'':  // VolumeDisabled
-        case L'':  // VolumeBars
+        case 0xE74F:  // Mute
+        case 0xE992:  // Volume0
+        case 0xE993:  // Volume1
+        case 0xE994:  // Volume2
+        case 0xE995:  // Volume3
+        case 0xEA85:  // VolumeDisabled
+        case 0xEBC5:  // VolumeBars
             return true;
     }
     return false;
@@ -126,6 +152,127 @@ bool IsHiddenByUs(const wux::FrameworkElement& content, bool remove) {
     return false;
 }
 
+// "Use the Windows icon" mode. Marking pointer events handled on the icon
+// doesn't stop the Quick Settings button that contains it from opening, so
+// instead a transparent popup is laid over the volume icon. The popup isn't
+// part of the button's tree, so the button never sees those clicks. It draws
+// its own hover highlight. UI thread only.
+struct Overlay {
+    winrt::weak_ref<wux::FrameworkElement> target;
+    winrt::weak_ref<wux::Controls::Control> button;  // the Quick Settings button around the icon
+    wux::Controls::Primitives::Popup popup{nullptr};
+    wux::Controls::Border border{nullptr};
+    winrt::event_token layoutToken{};
+    bool leftDown = false;
+};
+Overlay g_overlay;
+
+winrt::Windows::UI::Color HoverColor(const wux::FrameworkElement& e, bool pressed) {
+    bool dark = e.ActualTheme() == wux::ElementTheme::Dark;
+    uint8_t a = pressed ? 0x0A : 0x0F;  // SubtleFillColorSecondary / Tertiary
+    return dark ? winrt::Windows::UI::Color{a, 255, 255, 255} : winrt::Windows::UI::Color{(uint8_t)(a - 4), 0, 0, 0};
+}
+
+void PlaceOverlay() {
+    auto target = g_overlay.target.get();
+    if (!target || !g_overlay.popup) return;
+    auto p = target.TransformToVisual(nullptr).TransformPoint({0, 0});
+    float w = (float)target.ActualWidth(), h = (float)target.ActualHeight();
+    if (g_overlay.popup.HorizontalOffset() != p.X) g_overlay.popup.HorizontalOffset(p.X);
+    if (g_overlay.popup.VerticalOffset() != p.Y) g_overlay.popup.VerticalOffset(p.Y);
+    if (g_overlay.border.Width() != w) g_overlay.border.Width(w);
+    if (g_overlay.border.Height() != h) g_overlay.border.Height(h);
+}
+
+void RemoveOverlay() {
+    if (auto target = g_overlay.target.get())
+        if (g_overlay.layoutToken) target.LayoutUpdated(g_overlay.layoutToken);
+    if (g_overlay.popup) g_overlay.popup.IsOpen(false);
+    g_overlay = Overlay{};
+}
+
+void EnsureOverlay(const wux::FrameworkElement& icon) {
+    if (g_overlay.target.get() == icon && g_overlay.popup) {
+        PlaceOverlay();
+        return;
+    }
+    RemoveOverlay();
+
+    wux::Controls::Border border;
+    border.Background(wux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));  // transparent but hit-testable
+    border.CornerRadius(wux::CornerRadiusHelper::FromUniformRadius(4));
+    wux::Controls::Primitives::Popup popup;
+    popup.XamlRoot(icon.XamlRoot());
+    popup.Child(border);
+
+    // Hover/press look: put the whole Quick Settings button in its own
+    // visual state, so it highlights exactly as when hovering the network
+    // icon. Only if the button doesn't have those states, draw our own.
+    auto setFill = [](bool hover, bool pressed) {
+        auto target = g_overlay.target.get();
+        if (!target || !g_overlay.border) return;
+        if (auto button = g_overlay.button.get()) {
+            const wchar_t* state = pressed ? L"Pressed" : hover ? L"PointerOver" : L"Normal";
+            if (wux::VisualStateManager::GoToState(button, state, true)) {
+                g_overlay.border.Background(wux::Media::SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+                return;
+            }
+        }
+        auto c = hover ? HoverColor(target, pressed) : winrt::Windows::UI::Color{0, 0, 0, 0};
+        g_overlay.border.Background(wux::Media::SolidColorBrush(c));
+    };
+    border.PointerEntered([setFill](auto&&, auto&&) { setFill(true, false); });
+    border.PointerExited([setFill](auto&&, auto&&) {
+        g_overlay.leftDown = false;
+        setFill(false, false);
+    });
+    border.PointerPressed([setFill](auto&& sender, const wux::Input::PointerRoutedEventArgs& e) {
+        auto props = e.GetCurrentPoint(nullptr).Properties();
+        if (props.IsLeftButtonPressed()) {
+            g_overlay.leftDown = true;
+            setFill(true, true);
+        } else if (props.IsMiddleButtonPressed()) {
+            PostToHost(SYSICON_MIDDLE);
+        }
+        e.Handled(true);
+    });
+    border.PointerReleased([setFill](auto&&, const wux::Input::PointerRoutedEventArgs& e) {
+        e.Handled(true);
+        if (!g_overlay.leftDown) return;
+        g_overlay.leftDown = false;
+        setFill(true, false);
+        PostToHost(SYSICON_CLICK);
+    });
+    border.RightTapped([](auto&&, const wux::Input::RightTappedRoutedEventArgs& e) {
+        e.Handled(true);
+        PostToHost(SYSICON_MENU);
+    });
+    border.PointerWheelChanged([](auto&&, const wux::Input::PointerRoutedEventArgs& e) {
+        e.Handled(true);
+        PostToHost(SYSICON_WHEEL, e.GetCurrentPoint(nullptr).Properties().MouseWheelDelta());
+    });
+
+    g_overlay.target = icon;
+    for (wux::DependencyObject n = icon; n; n = wux::Media::VisualTreeHelper::GetParent(n)) {
+        auto fe = n.try_as<wux::FrameworkElement>();
+        if (fe && fe.Name() == L"ControlCenterButton") {
+            g_overlay.button = fe.try_as<wux::Controls::Control>();
+            break;
+        }
+    }
+    g_overlay.popup = popup;
+    g_overlay.border = border;
+    // Follow the icon when the tray re-lays out (icons added/removed, DPI...).
+    g_overlay.layoutToken = icon.LayoutUpdated([](auto&&, auto&&) {
+        try {
+            PlaceOverlay();
+        } catch (...) {
+        }
+    });
+    PlaceOverlay();
+    popup.IsOpen(true);
+}
+
 // UI thread. TextBlock "InnerTextBlock" -> ... -> SystemTray.TextIconContent
 // -> ... -> SystemTray.IconView -> ... -> "ControlCenterButton".
 void Evaluate(Tracked& t) {
@@ -156,6 +303,12 @@ void Evaluate(Tracked& t) {
     bool isVolume = ContentIsVolume(content);
     LOG(L"control center icon, glyph %04X, volume=%d hide=%d", tb.Text().empty() ? 0 : tb.Text()[0], isVolume,
         (bool)g_hide);
+    if (isVolume && iconView) {
+        if (g_intercept)
+            EnsureOverlay(iconView);
+        else if (g_overlay.target.get() == iconView)
+            RemoveOverlay();
+    }
     // Once an icon is known to be the volume one it stays hidden, even if its
     // glyphs are briefly all empty while Windows switches them.
     if (g_hide && (isVolume || IsHiddenByUs(content, false))) {
@@ -201,6 +354,66 @@ void OnTextBlock(const wux::Controls::TextBlock& tb) {
     SafeEvaluate(t);
 }
 
+// --- Quick Settings (ShellHost.exe) ----------------------------------------
+// The volume slider row is found from its "VolumeL2Button" (the ">" that opens
+// the device list). Hidden element: the highest ancestor inside "SlidersGroup"
+// that holds no other slider, so a brightness slider on laptops stays. On a
+// desktop that is the whole group. UI thread only.
+
+int CountSliders(const wux::DependencyObject& node, int depth = 0) {
+    int n = winrt::get_class_name(node) == L"ControlCenter.AsyncSlider" ? 1 : 0;
+    if (depth > 14) return n;
+    int count = wux::Media::VisualTreeHelper::GetChildrenCount(node);
+    for (int i = 0; i < count; i++) n += CountSliders(wux::Media::VisualTreeHelper::GetChild(node, i), depth + 1);
+    return n;
+}
+
+winrt::weak_ref<wux::FrameworkElement> g_qsButton;
+winrt::weak_ref<wux::UIElement> g_qsHidden;
+CoreDispatcher g_qsDispatcher{nullptr};
+
+void EvaluateQs() {
+    auto button = g_qsButton.get();
+    if (!button) return;
+    wux::UIElement row{nullptr};
+    bool inGroup = false, full = false;
+    for (wux::DependencyObject n = button; n; n = wux::Media::VisualTreeHelper::GetParent(n)) {
+        auto fe = n.try_as<wux::FrameworkElement>();
+        if (!fe) continue;
+        if (!full && CountSliders(fe) > 1) full = true;  // holds another slider too: stop growing the row
+        if (!full) row = fe;
+        if (fe.Name() == L"SlidersGroup") {
+            inGroup = true;
+            break;
+        }
+    }
+    // Never touch anything that isn't inside the sliders group.
+    if (!row || !inGroup) return;
+    LOG(L"QS row %s name=%s", winrt::get_class_name(row).c_str(), row.try_as<wux::FrameworkElement>().Name().c_str());
+    if (g_hideQs) {
+        if (row.Visibility() != wux::Visibility::Collapsed) row.Visibility(wux::Visibility::Collapsed);
+        g_qsHidden = row;
+    } else if (auto hidden = g_qsHidden.get()) {
+        hidden.Visibility(wux::Visibility::Visible);
+        g_qsHidden = nullptr;
+    }
+}
+
+void SafeEvaluateQs() {
+    try {
+        EvaluateQs();
+    } catch (...) {
+    }
+}
+
+void OnQsVolumeButton(const wux::FrameworkElement& button) {
+    g_qsButton = button;
+    g_qsDispatcher = button.Dispatcher();
+    // The row is only complete once loaded; re-check then too.
+    button.Loaded([](auto&&, auto&&) { SafeEvaluateQs(); });
+    SafeEvaluateQs();
+}
+
 void ApplyAll() {
     std::vector<std::shared_ptr<Tracked>> copy;
     {
@@ -213,6 +426,10 @@ void ApplyAll() {
         } catch (...) {
         }
     }
+    try {
+        if (g_qsDispatcher) g_qsDispatcher.RunAsync(CoreDispatcherPriority::Normal, [] { SafeEvaluateQs(); });
+    } catch (...) {
+    }
 }
 
 struct TreeWatcher : winrt::implements<TreeWatcher, IVisualTreeServiceCallback2> {
@@ -223,6 +440,20 @@ struct TreeWatcher : winrt::implements<TreeWatcher, IVisualTreeServiceCallback2>
             LOG(L"TREE %s type=%s name=%s", mutation == Add ? L"add" : L"remove", element.Type ? element.Type : L"?",
                 element.Name ? element.Name : L"");
 #endif
+            if (mutation == Add && element.Name && wcscmp(element.Name, L"VolumeL2Button") == 0) {
+                winrt::Windows::Foundation::IInspectable o;
+                if (SUCCEEDED(g_diag->GetIInspectableFromHandle(element.Handle,
+                                                                reinterpret_cast<::IInspectable**>(winrt::put_abi(o))))) {
+                    if (auto button = o.try_as<wux::FrameworkElement>()) {
+                        auto d = button.Dispatcher();
+                        if (d.HasThreadAccess())
+                            OnQsVolumeButton(button);
+                        else
+                            d.RunAsync(CoreDispatcherPriority::Normal, [button] { OnQsVolumeButton(button); });
+                    }
+                }
+                return S_OK;
+            }
             if (mutation != Add || !element.Name || wcscmp(element.Name, L"InnerTextBlock") != 0) return S_OK;
             LOG(L"InnerTextBlock added, type=%s", element.Type ? element.Type : L"?");
             winrt::Windows::Foundation::IInspectable obj;
@@ -274,7 +505,7 @@ DWORD WINAPI RefreshThread(void*) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     for (;;) {
         WaitForSingleObject(g_refreshEvent, INFINITE);
-        g_hide = ShouldHide();
+        ReadState();
         ApplyAll();
     }
 }
@@ -287,12 +518,13 @@ struct Tap : winrt::implements<Tap, IObjectWithSite> {
         // Stay loaded for the lifetime of explorer: our callbacks live here.
         HMODULE self;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                           reinterpret_cast<LPCWSTR>(&ShouldHide), &self);
+                           reinterpret_cast<LPCWSTR>(&ReadState), &self);
 
         std::wstring loadedName = TAP_LOADED_PREFIX + std::to_wstring(GetCurrentProcessId());
         g_loadedEvent = CreateEventW(nullptr, TRUE, FALSE, loadedName.c_str());
-        g_refreshEvent = CreateEventW(nullptr, FALSE, FALSE, TAP_REFRESH_EVENT_NAME);
-        g_hide = ShouldHide();
+        std::wstring refreshName = TAP_REFRESH_PREFIX + std::to_wstring(GetCurrentProcessId());
+        g_refreshEvent = CreateEventW(nullptr, FALSE, FALSE, refreshName.c_str());
+        ReadState();
         g_watcher = winrt::make_self<TreeWatcher>();
         LOG(L"SetSite pid=%lu hide=%d", GetCurrentProcessId(), (bool)g_hide);
 

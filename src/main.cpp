@@ -16,6 +16,8 @@ const UINT kTrayId = 1;
 const UINT_PTR kTimerTrayRetry = 1;
 const UINT_PTR kTimerTapRetry = 2;
 const UINT_PTR kTimerUpdateCheck = 3;
+const UINT_PTR kTimerTapWatch = 4;  // re-inject if explorer or ShellHost restarted
+const UINT kTapWatchMs = 60 * 1000;
 const UINT kFirstUpdateCheckMs = 15 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
@@ -136,7 +138,18 @@ wchar_t TrayGlyph(const AudioDevice* d) {
     return 0xE995;
 }
 
+void RemoveTray();
+
+// explorer needs the dll to hide the Windows icon or take its clicks;
+// ShellHost to hide the Quick Settings volume slider.
+bool ExplorerNeedsTap() { return g_settings.hideSystemVolumeIcon || g_settings.useSystemVolumeIcon; }
+bool NeedsTap() { return ExplorerNeedsTap() || g_settings.hideQuickSettingsVolume; }
+
 void UpdateTray(bool forceIcon = false) {
+    if (g_settings.useSystemVolumeIcon) {  // the Windows icon is our icon
+        if (g_trayAdded) RemoveTray();
+        return;
+    }
     const AudioDevice* d = g_audio.DefaultDevice();
     wchar_t glyph = TrayGlyph(d);
     bool light = TaskbarIsLight();
@@ -190,12 +203,13 @@ void RemoveTray() {
 
 void StartTapSync() {
     if (g_tapBusy.exchange(true)) return;
-    bool hide = g_settings.hideSystemVolumeIcon;
+    UINT_PTR need = (ExplorerNeedsTap() ? 1 : 0) | (g_settings.hideQuickSettingsVolume ? 2 : 0);
     HANDLE h = CreateThread(nullptr, 0, [](void* p) -> DWORD {
-        bool ok = TapClient::Sync(p != nullptr);
+        UINT_PTR need = (UINT_PTR)p;
+        bool ok = TapClient::Sync((need & 1) != 0, (need & 2) != 0);
         PostMessageW(g_host, WM_APP_TAP_DONE, ok, 0);
         return 0;
-    }, hide ? (void*)1 : nullptr, 0, nullptr);
+    }, (void*)need, 0, nullptr);
     if (h)
         CloseHandle(h);
     else
@@ -254,6 +268,7 @@ void EnsureFlyout() {
     if (g_flyoutCreated) return;
     g_flyoutCreated = g_flyout.Create(g_inst, g_host, &g_audio, &g_settings, &g_update);
     g_flyout.onHideIconChanged = [] {
+        UpdateTray(true);  // adds or removes our own icon
         g_tapRetries = 0;
         StartTapSync();
     };
@@ -347,7 +362,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_trayAdded = false;
         UpdateTray(true);
         g_tapRetries = 0;
-        if (g_settings.hideSystemVolumeIcon) StartTapSync();
+        if (NeedsTap()) StartTapSync();
         return 0;
     }
 
@@ -387,6 +402,31 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_flyoutCreated) g_flyout.OnVolumeChanged();
             return 0;
 
+        case WM_VOLUMEONE_SYSICON:  // the Windows volume icon was clicked (see tap.cpp)
+            if (!g_settings.useSystemVolumeIcon) return 0;
+            if (wp == SYSICON_CLICK) {
+                EnsureFlyout();
+                g_flyout.Toggle();
+            } else if (wp == SYSICON_MENU) {
+                // The cursor is on the taskbar, which would cover the bottom of
+                // the menu: anchor it to the edge of the work area instead.
+                POINT pt;
+                GetCursorPos(&pt);
+                MONITORINFO mi = {sizeof(mi)};
+                GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mi);
+                pt.x = std::clamp(pt.x, mi.rcWork.left, mi.rcWork.right - 1);
+                pt.y = std::clamp(pt.y, mi.rcWork.top, mi.rcWork.bottom - 1);
+                ShowMenu(pt.x, pt.y);
+            } else if (wp == SYSICON_MIDDLE) {
+                if (AudioDevice* d = g_audio.DefaultDevice()) g_audio.SetDeviceMute(*d, !d->muted);
+            } else if (wp == SYSICON_WHEEL) {
+                if (AudioDevice* d = g_audio.DefaultDevice()) {
+                    float v = d->volume + (int)(short)lp / (float)WHEEL_DELTA * 0.02f;
+                    g_audio.SetDeviceVolume(*d, std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 1.0f));
+                }
+            }
+            return 0;
+
         case WM_APP_SHOW_FLYOUT:
             EnsureFlyout();
             g_flyout.Show();
@@ -394,7 +434,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_APP_TAP_DONE:
             g_tapBusy = false;
-            if (!wp && g_settings.hideSystemVolumeIcon && g_tapRetries++ < 60)
+            if (!wp && NeedsTap() && g_tapRetries++ < 60)
                 SetTimer(hwnd, kTimerTapRetry, 2000, nullptr);  // taskbar not ready, e.g. right after sign-in
             return 0;
 
@@ -410,6 +450,10 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_TIMER:
+            if (wp == kTimerTapWatch) {
+                if (NeedsTap()) StartTapSync();
+                return 0;
+            }
             if (wp == kTimerUpdateCheck) {
                 SetTimer(hwnd, kTimerUpdateCheck, kUpdateCheckIntervalMs, nullptr);
                 CheckForUpdates(false);
@@ -479,9 +523,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // flyout's Direct2D resources are created on first use.
     g_audio.Init(g_host);
     UpdateTray(true);
-    if (g_settings.hideSystemVolumeIcon) StartTapSync();
+    if (NeedsTap()) StartTapSync();
     if (!background) PostMessageW(g_host, WM_APP_SHOW_FLYOUT, 0, 0);
     SetTimer(g_host, kTimerUpdateCheck, kFirstUpdateCheckMs, nullptr);
+    SetTimer(g_host, kTimerTapWatch, kTapWatchMs, nullptr);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {

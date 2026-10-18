@@ -12,6 +12,12 @@ void Settings::Load() {
     DWORD value = 0, size = sizeof(value);
     if (RegQueryValueExW(key, REG_HIDE_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
         hideSystemVolumeIcon = value != 0;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, REG_USE_SYSTEM_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        useSystemVolumeIcon = value != 0;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, REG_HIDE_QS_VOLUME, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        hideQuickSettingsVolume = value != 0;
 
     hiddenDevices.clear();
     size = 0;
@@ -44,6 +50,10 @@ void Settings::Save() const {
 
     DWORD value = hideSystemVolumeIcon ? 1 : 0;
     RegSetValueExW(key, REG_HIDE_ICON, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
+    value = useSystemVolumeIcon ? 1 : 0;
+    RegSetValueExW(key, REG_USE_SYSTEM_ICON, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
+    value = hideQuickSettingsVolume ? 1 : 0;
+    RegSetValueExW(key, REG_HIDE_QS_VOLUME, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
 
     std::wstring multi;
     for (const auto& id : hiddenDevices) {

@@ -32,7 +32,7 @@ struct UpdateState {
 
 class Flyout {
 public:
-    std::function<void()> onHideIconChanged;
+    std::function<void()> onHideIconChanged;   // also called when "use the Windows icon" changes
     std::function<void()> onExit;
     std::function<void()> onCheckUpdates;
     std::function<void()> onInstallUpdate;
@@ -53,7 +53,7 @@ public:
 private:
     enum class View { Mixer, Settings };
     enum class HitKind {
-        None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleHideIcon, ToggleStartup,
+        None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
         ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Exit
     };
     struct Hit {

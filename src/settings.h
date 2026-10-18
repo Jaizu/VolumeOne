@@ -7,6 +7,8 @@
 // Persistent settings, stored under HKCU\Software\VolumeOne.
 struct Settings {
     bool hideSystemVolumeIcon = false;
+    bool useSystemVolumeIcon = false;  // open VolumeOne from the Windows icon, no own tray icon
+    bool hideQuickSettingsVolume = false;  // hide the volume slider in Windows' Quick Settings
     std::vector<std::wstring> hiddenDevices;  // endpoint ids (outputs and inputs)
     // Per-device icon: "speakers", "headphones" or the path of a custom icon
     // copied into AppDataDir("icons"). Missing = automatic (from form factor).
