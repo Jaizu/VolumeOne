@@ -2,6 +2,11 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## Unreleased
+
+### Fixed
+- The header of an expanded device is now the same height as a collapsed one, so its hover highlight is centred on the name and icon.
+
 ## 1.2.0
 
 ### New
