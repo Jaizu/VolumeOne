@@ -2,6 +2,15 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.5.0
+
+### New
+- **Headset battery**: wireless headsets that report their battery show the level and a battery icon at the right of their name, in the mixer and in the output list. It turns red at 15% or less, and shows a charging icon while on the cable.
+  - Bluetooth: any headset whose level Windows shows in Settings → Bluetooth & devices.
+  - Over their USB dongle: Logitech G533, G535, G633, G635, G733, G933, G935, G PRO, PRO X, PRO X 2 and G522 LIGHTSPEED; SteelSeries Arctis Nova 7, Nova 5, Nova 3P, Arctis 7+ and GameBuds; HyperX Cloud II Wireless, Cloud III Wireless, Cloud II Core Wireless and Cloud Alpha 2.
+  - The level is read about every 30 seconds, and again when a device is plugged in or the mixer opens. Only read-only requests are sent, and it works alongside the vendor's own app.
+  - The protocols come from [Halo Battery](https://github.com/HeyOkay/HaloBattery), HeadsetControl, Solaar and HyperHeadset (see Credits in the README).
+
 ## 1.4.0
 
 ### New

@@ -39,4 +39,5 @@ enum : UINT {
     WM_APP_TAP_DONE,                // explorer dll sync finished (wParam = ok)
     WM_APP_UPDATE_CHECKED,          // update check finished (lParam = ReleaseInfo*, may be null)
     WM_APP_UPDATE_INSTALLED,        // update install finished (wParam = ok)
+    WM_APP_BATTERY_CHANGED,         // a headset's battery level changed (battery.cpp)
 };

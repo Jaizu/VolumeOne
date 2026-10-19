@@ -1,4 +1,5 @@
 #include "flyout.h"
+#include "battery.h"
 #include "strings.h"
 
 #include <shellscalingapi.h>
@@ -68,6 +69,11 @@ enum : wchar_t {
     kGlyphVolumeBars = 0xEBC5,
     kGlyphWarning = 0xE7BA,
     kGlyphSwitch = 0xE8AB,
+    kGlyphBattery0 = 0xE850,          // ..0xE859 = 0..90 %
+    kGlyphBattery10 = 0xE83F,         // full
+    kGlyphBatteryCharging0 = 0xE85A,  // ..0xE862 = 0..80 %
+    kGlyphBatteryCharging9 = 0xE83E,
+    kGlyphBatteryCharging10 = 0xEA93,
 };
 
 #ifdef VO_PERF
@@ -531,6 +537,7 @@ void Flyout::Show(bool settingsView) {
     hover_ = pressed_ = Hit{};
     startup_ = GetStartWithWindows();
     audio_->SetTrackSessions(true);
+    Battery::Refresh();
 
     Reposition(false);
     if (viewChanged) DwmFlush();
@@ -935,6 +942,25 @@ void Flyout::DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, 
 // Layout. The same code measures (draw == false) and paints, so hit testing
 // always matches what is on screen.
 
+float Flyout::BatteryBadge(const AudioDevice& d, float right, float top, float bottom, bool draw) {
+    BatteryLevel b;
+    if (!Battery::ForEndpoint(d.id, &b) || b.percent < 0) return right;
+    std::wstring text = std::to_wstring(b.percent) + L"%";
+    float tw = TextWidth(text, fCaption_.Get());
+    float left = right - tw - 24;
+    if (draw) {
+        int step = (b.percent + 5) / 10;  // 0..10
+        wchar_t g = b.charging ? (step >= 10 ? kGlyphBatteryCharging10 : step == 9 ? kGlyphBatteryCharging9
+                                                                             : (wchar_t)(kGlyphBatteryCharging0 + step))
+                               : (step >= 10 ? kGlyphBattery10 : (wchar_t)(kGlyphBattery0 + step));
+        bool low = b.percent <= 15 && !b.charging;
+        D2D1_COLOR_F c = low ? (pal_.dark ? Rgba(0xFF99A4) : Rgba(0xC42B1C)) : pal_.textSecondary;
+        Text(text, fCaption_.Get(), {left - 1, top, left + tw + 2, bottom}, c);
+        Glyph(g, 16, {right - 20, top, right, bottom}, c);
+    }
+    return left - 8;
+}
+
 float Flyout::Layout(bool draw) {
     hits_.clear();
     contentBottom_ = winH_ - kFooterHeight;
@@ -1061,8 +1087,9 @@ float Flyout::LayoutMixer(float y, bool draw) {
                 if (draw) {
                     if (i > 0) Fill({x0 + 12, row.top, x1 - 12, row.top + 1}, pal_.divider);
                     if (hover_ == item) Fill(row, pal_.subtleHover);
+                    float nameRight = BatteryBadge(option, x1 - 12, row.top, row.bottom, draw);
                     DeviceIcon(option, {x0 + 12, row.top + 8, x0 + 40, row.top + 32}, 16, pal_.textSecondary);
-                    Text(DeviceName(option), fBody_.Get(), {x0 + 48, row.top, x1 - 12, row.bottom}, pal_.text);
+                    Text(DeviceName(option), fBody_.Get(), {x0 + 48, row.top, nameRight, row.bottom}, pal_.text);
                 }
             }
             if (draw) {
@@ -1087,8 +1114,9 @@ float Flyout::LayoutMixer(float y, bool draw) {
             menuAnim_.Set(0);
         }
         if (draw) {
+            float nameRight = BatteryBadge(d, x1 - 12, cy, cy + 20, draw);
             DeviceIcon(d, {nameX, cy, nameX + 28, cy + 20}, 16, pal_.textSecondary);
-            Text(DeviceName(d), fTitle_.Get(), {nameX + 34, cy, x1 - 12, cy + 20}, pal_.text);
+            Text(DeviceName(d), fTitle_.Get(), {nameX + 34, cy, nameRight, cy + 20}, pal_.text);
         }
 
         // The app list wipes open under the header, sliding out from under it.

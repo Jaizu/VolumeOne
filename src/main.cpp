@@ -1,5 +1,6 @@
 #include "common.h"
 #include "audio.h"
+#include "battery.h"
 #include "flyout.h"
 #include "settings.h"
 #include "strings.h"
@@ -488,6 +489,11 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_audio.RefreshDevices();
             UpdateTray();
             if (g_flyoutCreated) g_flyout.OnAudioStructureChanged();
+            Battery::Refresh();
+            return 0;
+
+        case WM_APP_BATTERY_CHANGED:
+            if (g_flyoutCreated) g_flyout.OnVolumeChanged();
             return 0;
 
         case WM_APP_SESSIONS_CHANGED:
@@ -631,6 +637,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // Only what the tray icon needs happens before the message loop; the
     // flyout's Direct2D resources are created on first use.
     g_audio.Init(g_host);
+    Battery::Start(g_host);
     UpdateTray(true);
     if (NeedsTap()) StartTapSync();
     if (!background) PostMessageW(g_host, WM_APP_SHOW_FLYOUT, 0, 0);
@@ -645,6 +652,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     }
 
     RemoveTray();
+    Battery::Stop();
     g_audio.Shutdown();
     // The host window is gone now, so the explorer dll restores the Windows
     // volume icon when it re-checks.

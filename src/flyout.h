@@ -180,6 +180,8 @@ private:
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
     void DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c);
+    // The battery of the device's headset, ending at `right`; returns where it starts.
+    float BatteryBadge(const AudioDevice& d, float right, float top, float bottom, bool draw);
     ComPtr<ID2D1Bitmap> LoadIconBitmap(const std::wstring& path, int px);
     ComPtr<ID2D1Bitmap> LoadImageBitmap(const std::wstring& path, int px);
     ComPtr<ID2D1Bitmap> WicToD2D(IWICBitmapSource* src);

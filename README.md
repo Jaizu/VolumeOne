@@ -11,6 +11,7 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Output selector** at the top of the mixer; the app list collapses from the button beside the device volume slider. The device volume stays visible at the bottom
 - **Hide devices** you don't want to see (for example bass shakers for sim racing), for outputs and inputs. Settings → Output devices / Input devices
 - **Device icons**: pick speakers, headphones or your own `.ico`/`.png` per output device (click the icon in Settings). Custom icons are copied to `%LOCALAPPDATA%\VolumeOne\icons`, so they keep working if you delete the original
+- **Headset battery** at the right of the output's name, for wireless headsets that report it: any Bluetooth headset whose level Windows shows in Settings → Bluetooth & devices, and over their USB dongle the Logitech G533 / G535 / G633 / G635 / G733 / G933 / G935 / G PRO / PRO X / PRO X 2 (HID++ and LIGHTSPEED) and G522 LIGHTSPEED, SteelSeries Arctis Nova 7 / Nova 5 / Nova 3P / 7+ / GameBuds, and HyperX Cloud II Wireless / Cloud III Wireless / Cloud II Core Wireless / Cloud Alpha 2. Read-only, about every 30 seconds, and works alongside the vendor's own app
 - **Switch the default microphone** from the tray icon's right-click menu
 - **Replace the Windows volume icon** (toggle): VolumeOne takes over the original icon next to the network icon instead of adding its own tray icon (left-click mixer, right-click menu, middle-click mute, wheel for volume)
 - **Remove the volume slider from Quick Settings** (toggle)
@@ -50,3 +51,11 @@ Output: `bin\VolumeOne.exe`. The version lives in `src\version.h`; a release is 
 The taskbar's tray is XAML inside `explorer.exe`. VolumeOne embeds a small dll, writes it to `%LOCALAPPDATA%\VolumeOne` and loads it into explorer with `InitializeXamlDiagnosticsEx` (the documented XAML diagnostics API that TranslucentTB also uses). The dll watches the visual tree and collapses the volume glyph inside the Quick Settings button, the same elements the Windhawk mod hides. Nothing is patched on disk. In "use the Windows icon" mode it instead lays a transparent popup over the volume icon, so its clicks reach VolumeOne and not the Quick Settings button. The same dll is loaded into `ShellHost.exe` (the Quick Settings panel) to hide its volume slider. The dll stays loaded until explorer restarts; each build uses its own file name, so updates never collide with the loaded one.
 
 Settings live in `HKCU\Software\VolumeOne`. Start with Windows uses `HKCU\...\Run`.
+
+## How the headset battery is read
+
+A worker thread reads the levels about every 30 seconds, and again when a device is plugged in or the mixer opens. Bluetooth levels come from the property Windows keeps for Settings (`DEVPKEY_Bluetooth_Battery`); the USB dongles above are asked over their vendor HID collection, with requests that only read. A level belongs to a physical device (its PnP container id), which is also how it is matched to that device's outputs. The protocols are listed in [`src/battery.cpp`](src/battery.cpp).
+
+## Credits
+
+The headset battery protocols come from [Halo Battery](https://github.com/HeyOkay/HaloBattery) (MIT), whose [protocol notes](https://github.com/HeyOkay/HaloBattery/blob/main/docs/protocols.md) collect the work of [HeadsetControl](https://github.com/Sapd/HeadsetControl), [Solaar](https://github.com/pwr-Solaar/Solaar) and [HyperHeadset](https://github.com/LennardKittner/HyperHeadset). Thanks to their authors and to everyone who sent them captures from real hardware.
