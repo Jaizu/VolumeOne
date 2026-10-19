@@ -16,13 +16,16 @@ static const CLSID CLSID_VolumeOneTap = {0x6e1f3a57, 0x2c4b, 0x4e0d, {0x9b, 0x8a
 // signalled by VolumeOne.exe when a setting changes or the app exits.
 #define TAP_REFRESH_PREFIX L"Local\\VolumeOne.TapRefresh."
 
-#define REG_KEY_PATH L"Software\\VolumeOne"
-#define REG_HIDE_ICON L"HideSystemVolumeIcon"
+// Settings file in %LOCALAPPDATA%\VolumeOne (a UTF-16 ini, editable by hand).
+// The dll reads the [Settings] keys below from it.
+#define SETTINGS_FILE L"settings.ini"
+#define SETTINGS_SECTION L"Settings"
+#define SETTING_HIDE_ICON L"HideSystemVolumeIcon"
 // Use the Windows volume icon as VolumeOne's icon: the dll keeps it visible
 // and forwards its clicks to VolumeOne instead of opening Quick Settings.
-#define REG_USE_SYSTEM_ICON L"UseSystemVolumeIcon"
+#define SETTING_USE_SYSTEM_ICON L"UseSystemVolumeIcon"
 // Hide the volume slider in Windows' Quick Settings panel (ShellHost.exe).
-#define REG_HIDE_QS_VOLUME L"HideQuickSettingsVolume"
+#define SETTING_HIDE_QS_VOLUME L"HideQuickSettingsVolume"
 
 // Posted by the dll to VolumeOne's host window; wParam is one of SYSICON_*.
 #define WM_VOLUMEONE_SYSICON (WM_APP + 50)

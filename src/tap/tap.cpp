@@ -53,41 +53,60 @@ std::atomic<bool> g_hideQs{false};     // hide the Quick Settings volume slider
 winrt::com_ptr<IXamlDiagnostics> g_diag;
 HANDLE g_refreshEvent = nullptr;
 
-#ifdef TAP_LOG
+// Always on, so a problem on someone else's PC can be looked at:
+// %LOCALAPPDATA%\VolumeOne\VolumeOneTap.log, shared by explorer and ShellHost
+// (each line says which). Past 1 MB it starts over, keeping the old one.
 void Log(const wchar_t* fmt, ...) {
-    wchar_t buf[1024];
+    wchar_t msg[1024];
     va_list args;
     va_start(args, fmt);
-    vswprintf_s(buf, fmt, args);
+    _vsnwprintf_s(msg, _TRUNCATE, fmt, args);
     va_end(args);
+
     wchar_t path[MAX_PATH];
-    GetTempPathW(MAX_PATH, path);
-    wcscat_s(path, L"VolumeOneTap.log");
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path, L"a, ccs=UTF-8") == 0 && f) {
-        fwprintf(f, L"[%lu] %s\n", GetCurrentThreadId(), buf);
-        fclose(f);
+    if (!ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\VolumeOne\\VolumeOneTap.log", path, MAX_PATH)) return;
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, &fad) && (fad.nFileSizeHigh || fad.nFileSizeLow > 1024 * 1024)) {
+        wchar_t old[MAX_PATH];
+        wcscpy_s(old, path);
+        wcscpy_s(old + wcslen(old) - 4, 16, L".old.log");
+        MoveFileExW(path, old, MOVEFILE_REPLACE_EXISTING);
     }
+    wchar_t exe[MAX_PATH] = L"?";
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const wchar_t* name = wcsrchr(exe, L'\\');
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t line[1400];
+    int n = swprintf_s(line, L"%04u-%02u-%02u %02u:%02u:%02u.%03u %s %lu [%lu] %s\r\n", t.wYear, t.wMonth, t.wDay, t.wHour,
+                       t.wMinute, t.wSecond, t.wMilliseconds, name ? name + 1 : exe, GetCurrentProcessId(),
+                       GetCurrentThreadId(), msg);
+    if (n <= 0) return;
+    char utf8[4200];
+    int len = WideCharToMultiByte(CP_UTF8, 0, line, n, utf8, sizeof(utf8), nullptr, nullptr);
+    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD written;
+    WriteFile(f, utf8, (DWORD)len, &written, nullptr);
+    CloseHandle(f);
 }
 #define LOG(...) Log(__VA_ARGS__)
-#else
-#define LOG(...) ((void)0)
-#endif
 
 DWORD ReadDword(const wchar_t* name) {
-    DWORD value = 0, size = sizeof(value);
-    RegGetValueW(HKEY_CURRENT_USER, REG_KEY_PATH, name, RRF_RT_REG_DWORD, nullptr, &value, &size);
-    return value;
+    wchar_t path[MAX_PATH];
+    if (!ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\VolumeOne\\" SETTINGS_FILE, path, MAX_PATH)) return 0;
+    return GetPrivateProfileIntW(SETTINGS_SECTION, name, 0, path);
 }
 
 // Re-reads what VolumeOne wants. Nothing happens while it isn't running, so
 // quitting it gives Windows its icon back.
 void ReadState() {
     bool running = FindWindowW(HOST_WINDOW_CLASS, nullptr) != nullptr;
-    bool useSystem = running && ReadDword(REG_USE_SYSTEM_ICON) != 0;
+    bool useSystem = running && ReadDword(SETTING_USE_SYSTEM_ICON) != 0;
     g_intercept = useSystem;
-    g_hide = running && !useSystem && ReadDword(REG_HIDE_ICON) != 0;
-    g_hideQs = running && ReadDword(REG_HIDE_QS_VOLUME) != 0;
+    g_hide = running && !useSystem && ReadDword(SETTING_HIDE_ICON) != 0;
+    g_hideQs = running && ReadDword(SETTING_HIDE_QS_VOLUME) != 0;
     LOG(L"ReadState: running=%d hide=%d intercept=%d", running, (bool)g_hide, (bool)g_intercept);
 }
 
@@ -177,6 +196,9 @@ void PlaceOverlay() {
     if (!target || !g_overlay.popup) return;
     auto p = target.TransformToVisual(nullptr).TransformPoint({0, 0});
     float w = (float)target.ActualWidth(), h = (float)target.ActualHeight();
+    if (g_overlay.popup.HorizontalOffset() != p.X || g_overlay.popup.VerticalOffset() != p.Y || g_overlay.border.Width() != w ||
+        g_overlay.border.Height() != h)
+        LOG(L"overlay moved to %.0f,%.0f, %.0fx%.0f", p.X, p.Y, w, h);
     if (g_overlay.popup.HorizontalOffset() != p.X) g_overlay.popup.HorizontalOffset(p.X);
     if (g_overlay.popup.VerticalOffset() != p.Y) g_overlay.popup.VerticalOffset(p.Y);
     if (g_overlay.border.Width() != w) g_overlay.border.Width(w);
@@ -184,6 +206,7 @@ void PlaceOverlay() {
 }
 
 void RemoveOverlay() {
+    if (g_overlay.popup) LOG(L"overlay removed");
     if (auto target = g_overlay.target.get())
         if (g_overlay.layoutToken) target.LayoutUpdated(g_overlay.layoutToken);
     if (g_overlay.popup) g_overlay.popup.IsOpen(false);
@@ -240,6 +263,7 @@ void EnsureOverlay(const wux::FrameworkElement& icon) {
         if (!g_overlay.leftDown) return;
         g_overlay.leftDown = false;
         setFill(true, false);
+        LOG(L"volume icon clicked");
         PostToHost(SYSICON_CLICK);
     });
     border.RightTapped([](auto&&, const wux::Input::RightTappedRoutedEventArgs& e) {
@@ -270,6 +294,8 @@ void EnsureOverlay(const wux::FrameworkElement& icon) {
     });
     PlaceOverlay();
     popup.IsOpen(true);
+    LOG(L"overlay over the volume icon at %.0f,%.0f, %.0fx%.0f (button found: %d)", g_overlay.popup.HorizontalOffset(),
+        g_overlay.popup.VerticalOffset(), g_overlay.border.Width(), g_overlay.border.Height(), (bool)g_overlay.button.get());
 }
 
 // UI thread. TextBlock "InnerTextBlock" -> ... -> SystemTray.TextIconContent

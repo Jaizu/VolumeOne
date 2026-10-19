@@ -27,7 +27,8 @@ using Microsoft::WRL::ComPtr;
 #define APP_VERSION_W2(s) L##s
 #define APP_VERSION_W(s) APP_VERSION_W2(s)
 #define APP_VERSION APP_VERSION_W(APP_VERSION_A)
-#define APP_REG_KEY REG_KEY_PATH
+// Where settings were kept before 1.6.0; migrated to SETTINGS_FILE.
+#define APP_LEGACY_REG_KEY L"Software\\VolumeOne"
 
 // Window messages shared between modules.
 enum : UINT {

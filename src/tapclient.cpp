@@ -1,5 +1,6 @@
 #include "tapclient.h"
 #include "settings.h"
+#include "log.h"
 
 #include <restartmanager.h>
 #include <tlhelp32.h>
@@ -109,7 +110,10 @@ static std::wstring LoadedDll(DWORD pid) {
 
 static bool Inject(DWORD pid) {
     std::wstring path = ExtractDll();
-    if (path.empty()) return false;
+    if (path.empty()) {
+        LOG(L"tap: couldn't write the dll to %s (%lu)", AppDataDir().c_str(), GetLastError());
+        return false;
+    }
 
     using InitFn = HRESULT(WINAPI*)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, CLSID, LPCWSTR);
     HMODULE xaml = LoadLibraryExW(L"Windows.UI.Xaml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -120,6 +124,7 @@ static bool Inject(DWORD pid) {
     // The taskbar's XAML may not exist yet right after sign-in; the caller
     // retries until this succeeds.
     HRESULT hr = init(L"VisualDiagConnection1", pid, nullptr, path.c_str(), CLSID_VolumeOneTap, nullptr);
+    LOG(L"tap: inject into pid %lu: %08X", pid, hr);
     return SUCCEEDED(hr);
 }
 
@@ -184,10 +189,12 @@ static void Signal(DWORD pid) {
 static bool SyncProcess(DWORD pid, bool needed, DWORD (*restart)(DWORD)) {
     if (!pid) return !needed;
     std::wstring loaded = LoadedDll(pid);
+    LOG(L"tap: pid %lu, needed=%d, loaded dll: %s", pid, needed, loaded.empty() ? L"none" : loaded.c_str());
     // An older build's dll (e.g. after an update) can't be replaced while
     // loaded: restart the process so this build's dll can go in.
     if (needed && !loaded.empty() && _wcsicmp(loaded.c_str(), DllName().c_str()) != 0) {
         pid = restart(pid);
+        LOG(L"tap: restarted for the new dll, new pid %lu", pid);
         if (!pid) return false;
         loaded.clear();
     }

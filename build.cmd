@@ -1,5 +1,5 @@
 @echo off
-rem Builds bin\VolumeOne.exe (with the explorer dll embedded) using MSVC.
+rem Builds bin\VolumeOne.exe (with the explorer dll embedded) and bin\VolumeOneRemover.exe using MSVC.
 setlocal
 cd /d "%~dp0"
 
@@ -35,11 +35,16 @@ cl %CFLAGS% /LD src\tap\tap.cpp /Fe:obj\VolumeOneTap.dll /link %LFLAGS% /DEF:src
 
 rc /nologo /fo obj\app.res res\app.rc || exit /b 1
 
-cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp src\strings.cpp src\battery.cpp obj\app.res ^
+cl %CFLAGS% src\main.cpp src\audio.cpp src\flyout.cpp src\settings.cpp src\tapclient.cpp src\updater.cpp src\strings.cpp src\battery.cpp src\log.cpp obj\app.res ^
    /Fe:"%OUT%\VolumeOne.exe" /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
    user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ^
    windowscodecs.lib version.lib shcore.lib propsys.lib winhttp.lib bcrypt.lib rstrtmgr.lib ^
    d3d11.lib coremessaging.lib windowsapp.lib setupapi.lib hid.lib cfgmgr32.lib || exit /b 1
 
+rem Uninstaller, published next to VolumeOne.exe in each release.
+rc /nologo /fo obj\remover.res res\remover.rc || exit /b 1
+cl %CFLAGS% src\remover\remover.cpp obj\remover.res /Fe:"%OUT%\VolumeOneRemover.exe" /link %LFLAGS% /SUBSYSTEM:WINDOWS ^
+   user32.lib shell32.lib ole32.lib advapi32.lib rstrtmgr.lib || exit /b 1
+
 echo.
-echo Built %OUT%\VolumeOne.exe
+echo Built %OUT%\VolumeOne.exe and %OUT%\VolumeOneRemover.exe

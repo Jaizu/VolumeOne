@@ -20,6 +20,7 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Built-in updater**: checks GitHub releases at startup and once a day, and updates itself in place
 - Click a speaker or app icon to mute it. Scroll over a row to change its volume. Middle-click the tray icon to mute the default device
 - **Close and restore Windows** from Settings to close it: everything VolumeOne changed in Windows goes back, and your settings are kept for next time
+- **Diagnostic log** in `%LOCALAPPDATA%\VolumeOne`, to attach to a bug report: Settings → Diagnostic log, or the tray icon's right-click menu
 - English and Spanish, following the Windows language. Translations are plain text files in [`lang/`](lang/README.md)
 - A single `.exe`, no installer
 
@@ -30,6 +31,12 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 3. Windows 11 puts new tray icons in the overflow menu. To keep it visible: Settings → Personalization → Taskbar → Other system tray icons → VolumeOne
 
 SmartScreen may warn you the first time because the exe is not signed: **More info** → **Run anyway**.
+
+## Uninstalling
+
+Download `VolumeOneRemover.exe` from the [latest release](https://github.com/Jaizu/VolumeOne/releases/latest) and run it. It closes VolumeOne, removes the startup entry, deletes `VolumeOne.exe` (wherever it runs from, and the copy in `Documents\VolumeOne`), `%LOCALAPPDATA%\VolumeOne` (settings, custom icons, logs, the explorer dll) and VolumeOne's tray icon entry, then restarts Windows Explorer so everything is back as it was. Afterwards you can delete the remover itself.
+
+To keep your settings and only undo VolumeOne's changes to Windows, use **Close and restore Windows** in Settings instead.
 
 ## Usage
 
@@ -44,13 +51,13 @@ Requires the MSVC toolchain (Visual Studio or Build Tools with "Desktop developm
 build.cmd
 ```
 
-Output: `bin\VolumeOne.exe`. The version lives in `src\version.h`; a release is tagged `v<version>` with `VolumeOne.exe` attached.
+Output: `bin\VolumeOne.exe` and `bin\VolumeOneRemover.exe`. The version lives in `src\version.h`; a release is tagged `v<version>` with both attached (`tools\release.ps1`).
 
 ## How hiding the Windows volume icon works
 
 The taskbar's tray is XAML inside `explorer.exe`. VolumeOne embeds a small dll, writes it to `%LOCALAPPDATA%\VolumeOne` and loads it into explorer with `InitializeXamlDiagnosticsEx` (the documented XAML diagnostics API that TranslucentTB also uses). The dll watches the visual tree and collapses the volume glyph inside the Quick Settings button, the same elements the Windhawk mod hides. Nothing is patched on disk. In "use the Windows icon" mode it instead lays a transparent popup over the volume icon, so its clicks reach VolumeOne and not the Quick Settings button. The same dll is loaded into `ShellHost.exe` (the Quick Settings panel) to hide its volume slider. The dll stays loaded until explorer restarts; each build uses its own file name, so updates never collide with the loaded one.
 
-Settings live in `HKCU\Software\VolumeOne`. Start with Windows uses `HKCU\...\Run`.
+Settings live in `%LOCALAPPDATA%\VolumeOne\settings.ini`, a plain ini file you can back up or edit with VolumeOne closed (versions before 1.6.0 used `HKCU\Software\VolumeOne`; it is migrated automatically). Start with Windows uses `HKCU\...\Run`.
 
 ## How the headset battery is read
 

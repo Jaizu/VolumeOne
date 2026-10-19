@@ -1,95 +1,165 @@
 #include "settings.h"
+#include "log.h"
 
 #include <shlobj.h>
 
 static const wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
-void Settings::Load() {
+static std::wstring SettingsPath() { return AppDataDir() + L"\\" SETTINGS_FILE; }
+
+// Before 1.6.0 settings lived in HKCU\Software\VolumeOne. Returns false if
+// that key doesn't exist.
+static bool LoadLegacy(Settings& s) {
     HKEY key;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, APP_REG_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
-        return;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, APP_LEGACY_REG_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return false;
 
     DWORD value = 0, size = sizeof(value);
-    if (RegQueryValueExW(key, REG_HIDE_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
-        hideSystemVolumeIcon = value != 0;
+    if (RegQueryValueExW(key, SETTING_HIDE_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        s.hideSystemVolumeIcon = value != 0;
     size = sizeof(value);
-    if (RegQueryValueExW(key, REG_USE_SYSTEM_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
-        useSystemVolumeIcon = value != 0;
+    if (RegQueryValueExW(key, SETTING_USE_SYSTEM_ICON, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        s.useSystemVolumeIcon = value != 0;
     size = sizeof(value);
-    if (RegQueryValueExW(key, REG_HIDE_QS_VOLUME, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
-        hideQuickSettingsVolume = value != 0;
+    if (RegQueryValueExW(key, SETTING_HIDE_QS_VOLUME, nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        s.hideQuickSettingsVolume = value != 0;
     size = sizeof(value);
-    if (RegQueryValueExW(key, L"MeterColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS && value <= MeterCustom)
-        meterColor = value;
+    if (RegQueryValueExW(key, L"MeterColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS &&
+        value <= Settings::MeterCustom)
+        s.meterColor = value;
     size = sizeof(value);
     if (RegQueryValueExW(key, L"MeterCustomColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
-        meterCustomColor = value & 0xFFFFFF;
+        s.meterCustomColor = value & 0xFFFFFF;
     size = sizeof(value);
     if (RegQueryValueExW(key, L"MeterCustomBar", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
-        meterCustomBar = value & 0xFFFFFF;
+        s.meterCustomBar = value & 0xFFFFFF;
     size = sizeof(value);
     if (RegQueryValueExW(key, L"DeviceNameMode", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS &&
-        value <= NameTechnical)
-        deviceNameMode = value;
+        value <= Settings::NameTechnical)
+        s.deviceNameMode = value;
 
-    hiddenDevices.clear();
     size = 0;
     if (RegQueryValueExW(key, L"HiddenDevices", nullptr, nullptr, nullptr, &size) == ERROR_SUCCESS && size > 0) {
         std::wstring buf(size / sizeof(wchar_t) + 2, L'\0');
         if (RegQueryValueExW(key, L"HiddenDevices", nullptr, nullptr, (BYTE*)buf.data(), &size) == ERROR_SUCCESS) {
             for (const wchar_t* p = buf.c_str(); *p; p += wcslen(p) + 1)
-                hiddenDevices.emplace_back(p);
+                s.hiddenDevices.emplace_back(p);
         }
     }
 
-    deviceIcons.clear();
     HKEY icons;
     if (RegOpenKeyExW(key, L"DeviceIcons", 0, KEY_READ, &icons) == ERROR_SUCCESS) {
         wchar_t name[512], data[MAX_PATH * 2];
         for (DWORD i = 0;; i++) {
             DWORD nameLen = ARRAYSIZE(name), dataLen = sizeof(data), type = 0;
             if (RegEnumValueW(icons, i, name, &nameLen, nullptr, &type, (BYTE*)data, &dataLen) != ERROR_SUCCESS) break;
-            if (type == REG_SZ) deviceIcons[name] = data;
+            if (type == REG_SZ) s.deviceIcons[name] = data;
         }
         RegCloseKey(icons);
     }
     RegCloseKey(key);
+    return true;
+}
+
+// The "key=value" lines of an ini section.
+static std::vector<std::pair<std::wstring, std::wstring>> ReadSection(const std::wstring& path, const wchar_t* section) {
+    std::vector<std::pair<std::wstring, std::wstring>> out;
+    std::wstring buf(32768, L'\0');
+    DWORD len = GetPrivateProfileSectionW(section, buf.data(), (DWORD)buf.size(), path.c_str());
+    for (const wchar_t* p = buf.c_str(); p < buf.c_str() + len && *p; p += wcslen(p) + 1) {
+        const wchar_t* eq = wcschr(p, L'=');
+        if (!eq || eq == p) continue;
+        out.emplace_back(std::wstring(p, eq), std::wstring(eq + 1));
+    }
+    return out;
+}
+
+static std::wstring ReadString(const std::wstring& path, const wchar_t* name) {
+    wchar_t buf[64] = {};
+    GetPrivateProfileStringW(SETTINGS_SECTION, name, L"", buf, ARRAYSIZE(buf), path.c_str());
+    return buf;
+}
+
+static void ReadBool(const std::wstring& path, const wchar_t* name, bool& out) {
+    std::wstring v = ReadString(path, name);
+    if (!v.empty()) out = _wtoi(v.c_str()) != 0 || _wcsicmp(v.c_str(), L"true") == 0;
+}
+
+// "#RRGGBB" (the # is optional).
+static void ReadColor(const std::wstring& path, const wchar_t* name, DWORD& out) {
+    std::wstring v = ReadString(path, name);
+    const wchar_t* p = v.c_str() + (v[0] == L'#');
+    wchar_t* end = nullptr;
+    unsigned long c = wcstoul(p, &end, 16);
+    if (end != p && !*end) out = c & 0xFFFFFF;
+}
+
+void Settings::Load() {
+    std::wstring path = SettingsPath();
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        // First run of 1.6.0 or later: move the old registry settings to the file.
+        if (LoadLegacy(*this)) {
+            Save();
+            if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                RegDeleteTreeW(HKEY_CURRENT_USER, APP_LEGACY_REG_KEY);
+                RegDeleteKeyW(HKEY_CURRENT_USER, APP_LEGACY_REG_KEY);
+                LOG(L"settings: migrated from the registry to %s", path.c_str());
+            }
+        }
+        return;
+    }
+
+    ReadBool(path, SETTING_HIDE_ICON, hideSystemVolumeIcon);
+    ReadBool(path, SETTING_USE_SYSTEM_ICON, useSystemVolumeIcon);
+    ReadBool(path, SETTING_HIDE_QS_VOLUME, hideQuickSettingsVolume);
+    DWORD value = (DWORD)GetPrivateProfileIntW(SETTINGS_SECTION, L"MeterColor", meterColor, path.c_str());
+    if (value <= MeterCustom) meterColor = value;
+    ReadColor(path, L"MeterCustomColor", meterCustomColor);
+    ReadColor(path, L"MeterCustomBar", meterCustomBar);
+    value = (DWORD)GetPrivateProfileIntW(SETTINGS_SECTION, L"DeviceNameMode", deviceNameMode, path.c_str());
+    if (value <= NameTechnical) deviceNameMode = value;
+
+    hiddenDevices.clear();
+    for (const auto& [name, id] : ReadSection(path, L"HiddenDevices"))
+        if (!id.empty()) hiddenDevices.push_back(id);
+    deviceIcons.clear();
+    for (const auto& [id, icon] : ReadSection(path, L"DeviceIcons"))
+        if (!icon.empty()) deviceIcons[id] = icon;
 }
 
 void Settings::Save() const {
-    HKEY key;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, APP_REG_KEY, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS)
-        return;
+    auto color = [](DWORD c) {
+        wchar_t buf[16];
+        swprintf_s(buf, L"#%06X", c & 0xFFFFFF);
+        return std::wstring(buf);
+    };
+    // UTF-16 with a BOM, so the ini functions keep non-ASCII paths intact.
+    std::wstring text = L"﻿"
+                        L"; VolumeOne settings. Close VolumeOne before editing: it rewrites this file.\r\n"
+                        L"; MeterColor: 0 accent, 1 white, 2 green, 3 custom (MeterCustomColor, MeterCustomBar)\r\n"
+                        L"; DeviceNameMode: 0 both, 1 name in Windows, 2 hardware name\r\n"
+                        L"[" SETTINGS_SECTION L"]\r\n";
+    auto line = [&](const std::wstring& name, const std::wstring& value) { text += name + L"=" + value + L"\r\n"; };
+    line(SETTING_HIDE_ICON, hideSystemVolumeIcon ? L"1" : L"0");
+    line(SETTING_USE_SYSTEM_ICON, useSystemVolumeIcon ? L"1" : L"0");
+    line(SETTING_HIDE_QS_VOLUME, hideQuickSettingsVolume ? L"1" : L"0");
+    line(L"MeterColor", std::to_wstring(meterColor));
+    line(L"MeterCustomColor", color(meterCustomColor));
+    line(L"MeterCustomBar", color(meterCustomBar));
+    line(L"DeviceNameMode", std::to_wstring(deviceNameMode));
+    text += L"\r\n[HiddenDevices]\r\n";
+    for (size_t i = 0; i < hiddenDevices.size(); i++) line(L"Device" + std::to_wstring(i + 1), hiddenDevices[i]);
+    text += L"\r\n; speakers, headphones or the path of an image\r\n[DeviceIcons]\r\n";
+    for (const auto& [id, icon] : deviceIcons) line(id, icon);
 
-    DWORD value = hideSystemVolumeIcon ? 1 : 0;
-    RegSetValueExW(key, REG_HIDE_ICON, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
-    value = useSystemVolumeIcon ? 1 : 0;
-    RegSetValueExW(key, REG_USE_SYSTEM_ICON, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
-    value = hideQuickSettingsVolume ? 1 : 0;
-    RegSetValueExW(key, REG_HIDE_QS_VOLUME, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
-    RegSetValueExW(key, L"MeterColor", 0, REG_DWORD, (const BYTE*)&meterColor, sizeof(meterColor));
-    RegSetValueExW(key, L"MeterCustomColor", 0, REG_DWORD, (const BYTE*)&meterCustomColor, sizeof(meterCustomColor));
-    RegSetValueExW(key, L"MeterCustomBar", 0, REG_DWORD, (const BYTE*)&meterCustomBar, sizeof(meterCustomBar));
-    RegSetValueExW(key, L"DeviceNameMode", 0, REG_DWORD, (const BYTE*)&deviceNameMode, sizeof(deviceNameMode));
-
-    std::wstring multi;
-    for (const auto& id : hiddenDevices) {
-        multi += id;
-        multi.push_back(L'\0');
-    }
-    multi.push_back(L'\0');
-    RegSetValueExW(key, L"HiddenDevices", 0, REG_MULTI_SZ, (const BYTE*)multi.data(),
-                   (DWORD)(multi.size() * sizeof(wchar_t)));
-
-    RegDeleteTreeW(key, L"DeviceIcons");
-    HKEY icons;
-    if (RegCreateKeyExW(key, L"DeviceIcons", 0, nullptr, 0, KEY_WRITE, nullptr, &icons, nullptr) == ERROR_SUCCESS) {
-        for (const auto& [id, value] : deviceIcons)
-            RegSetValueExW(icons, id.c_str(), 0, REG_SZ, (const BYTE*)value.c_str(),
-                           (DWORD)((value.size() + 1) * sizeof(wchar_t)));
-        RegCloseKey(icons);
-    }
-    RegCloseKey(key);
+    // Written next to it and swapped in, so the dll never reads half a file.
+    std::wstring path = SettingsPath(), tmp = path + L".tmp";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD bytes = (DWORD)(text.size() * sizeof(wchar_t)), written = 0;
+    BOOL ok = WriteFile(f, text.data(), bytes, &written, nullptr) && written == bytes;
+    CloseHandle(f);
+    if (!ok || !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) DeleteFileW(tmp.c_str());
 }
 
 static bool ContainsCaseInsensitive(const std::wstring& text, const std::wstring& value) {

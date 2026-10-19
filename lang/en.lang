@@ -70,3 +70,7 @@ closeConfirm = Close VolumeOne and restore the Windows volume controls?\n\nIt wi
 locationWarning = VolumeOne is in {0}. If that folder gets cleaned up, it will be deleted.
 moveToDocuments = Move to Documents
 moveFailed = Couldn't move it
+logs = Diagnostic log
+logsDesc = What VolumeOne has been doing, to send along with a bug report
+openLogs = Open log folder
+flyoutFailed = VolumeOne couldn't open its window. The log folder will open so you can send the log.\n\nClose VolumeOne and restore Windows?

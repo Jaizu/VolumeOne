@@ -70,6 +70,7 @@ public:
     std::function<void()> onInstallUpdate;
     std::function<void()> onCloseAndRestore;
     std::function<void()> onMoveToDocuments;
+    std::function<void()> onOpenLogs;
     std::wstring locationName;  // folder the exe is in, if it's a risky one (Downloads...); shows a warning
 
     bool Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* settings, const UpdateState* update);
@@ -95,7 +96,7 @@ private:
     enum class HitKind {
         None, Mute, Slider, Collapse, DeviceMenu, SelectDevice, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
         ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
-        CloseRestore, MoveToDocuments
+        CloseRestore, MoveToDocuments, OpenLogs
     };
     struct Hit {
         HitKind kind = HitKind::None;

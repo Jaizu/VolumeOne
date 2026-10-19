@@ -4,7 +4,8 @@
 
 #include <map>
 
-// Persistent settings, stored under HKCU\Software\VolumeOne.
+// Persistent settings, stored in %LOCALAPPDATA%\VolumeOne\settings.ini
+// (moved there from HKCU\Software\VolumeOne on the first run of 1.6.0).
 struct Settings {
     bool hideSystemVolumeIcon = false;
     bool useSystemVolumeIcon = false;  // open VolumeOne from the Windows icon, no own tray icon

@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "battery.h"
 #include "flyout.h"
+#include "log.h"
 #include "settings.h"
 #include "strings.h"
 #include "tapclient.h"
@@ -24,7 +25,7 @@ const UINT_PTR kTimerTapWatch = 4;  // re-inject if explorer or ShellHost restar
 const UINT kTapWatchMs = 60 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
-enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdInputFirst = 100, IdOutputFirst = 200 };
+enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdLogs, IdInputFirst = 100, IdOutputFirst = 200 };
 
 HINSTANCE g_inst;
 HWND g_host;
@@ -182,14 +183,22 @@ void UpdateTray(bool forceIcon = false) {
     }
     wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
 
-    if (g_trayAdded && !Shell_NotifyIconW(NIM_MODIFY, &nid)) g_trayAdded = false;
+    if (g_trayAdded && !Shell_NotifyIconW(NIM_MODIFY, &nid)) {
+        LOG(L"tray: modify failed (%lu), adding it again", GetLastError());
+        g_trayAdded = false;
+    }
     if (!g_trayAdded) {
+        static bool loggedFail = false;  // it retries every second until explorer is ready
         if (Shell_NotifyIconW(NIM_ADD, &nid)) {
             nid.uVersion = NOTIFYICON_VERSION_4;
-            Shell_NotifyIconW(NIM_SETVERSION, &nid);
+            BOOL v4 = Shell_NotifyIconW(NIM_SETVERSION, &nid);
+            LOG(L"tray: icon added (version 4: %d)", v4);
+            loggedFail = false;
             g_trayAdded = true;
             KillTimer(g_host, kTimerTrayRetry);
         } else {
+            if (!loggedFail) LOG(L"tray: add failed (%lu), retrying", GetLastError());
+            loggedFail = true;
             SetTimer(g_host, kTimerTrayRetry, 1000, nullptr);  // explorer not ready yet
         }
     }
@@ -209,6 +218,7 @@ void RemoveTray() {
 void StartTapSync() {
     if (g_tapBusy.exchange(true)) return;
     UINT_PTR need = (ExplorerNeedsTap() ? 1 : 0) | (g_settings.hideQuickSettingsVolume ? 2 : 0);
+    LOG(L"tap: sync (explorer=%d, shellhost=%d)", (int)(need & 1), (int)((need & 2) != 0));
     HANDLE h = CreateThread(nullptr, 0, [](void* p) -> DWORD {
         UINT_PTR need = (UINT_PTR)p;
         bool ok = TapClient::Sync((need & 1) != 0, (need & 2) != 0);
@@ -245,6 +255,7 @@ void CheckForUpdates(bool manual) {
 }
 
 void OnUpdateChecked(Updater::ReleaseInfo* info) {
+    LOG(L"update: check %s%s", info ? L"ok, latest " : L"failed", info ? info->version.c_str() : L"");
     if (info && Updater::IsNewer(info->version, APP_VERSION)) {
         g_release = *info;
         g_update.version = info->version;
@@ -355,6 +366,7 @@ void FinishMove(const wchar_t* cmdLine) {
 // ends, explorer/ShellHost are restarted without our dll and its copies are
 // deleted. Settings and custom icons stay for the next launch.
 void CloseAndRestore() {
+    LOG(L"close and restore Windows");
     SetStartWithWindows(false);
     g_restoreOnExit = true;
     DestroyWindow(g_host);
@@ -364,7 +376,20 @@ void CloseAndRestore() {
 
 void EnsureFlyout() {
     if (g_flyoutCreated) return;
+    static bool failed = false;
+    if (failed) return;  // already reported; Create isn't safe to call twice
     g_flyoutCreated = g_flyout.Create(g_inst, g_host, &g_audio, &g_settings, &g_update);
+    LOG(L"flyout: create %s", g_flyoutCreated ? L"ok" : L"FAILED");
+    if (!g_flyoutCreated) {
+        // Without the flyout there are no settings to undo anything with:
+        // offer the way out here instead.
+        failed = true;
+        std::wstring msg = std::wstring(S().flyoutFailed) + L"\n\n" + Log::Folder();
+        int answer = MessageBoxW(nullptr, msg.c_str(), APP_NAME, MB_YESNO | MB_ICONERROR | MB_SETFOREGROUND);
+        Log::OpenFolder();
+        if (answer == IDYES) CloseAndRestore();
+        return;
+    }
     g_flyout.onHideIconChanged = [] {
         UpdateTray(true);  // adds or removes our own icon
         g_tapRetries = 0;
@@ -380,6 +405,7 @@ void EnsureFlyout() {
     };
     g_flyout.locationName = RiskyLocationName();
     g_flyout.onInstallUpdate = [] { InstallUpdate(); };
+    g_flyout.onOpenLogs = [] { Log::OpenFolder(); };
 }
 
 void ShowMenu(int x, int y) {
@@ -417,6 +443,7 @@ void ShowMenu(int x, int y) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IdSoundSettings, S().soundSettings);
     AppendMenuW(menu, MF_STRING, IdWindowsMixer, S().windowsMixer);
+    AppendMenuW(menu, MF_STRING, IdLogs, S().openLogs);
     if (g_update.status == UpdateState::Available) {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         std::wstring label = std::wstring(S().updateNow) + L" (" + g_update.version + L")";
@@ -427,6 +454,7 @@ void ShowMenu(int x, int y) {
     SetForegroundWindow(g_host);
     UINT align = GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN;
     int cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | align, x, y, g_host, nullptr);
+    LOG(L"menu at %d,%d: command %d", x, y, cmd);
     PostMessageW(g_host, WM_NULL, 0, 0);
     DestroyMenu(menu);
 
@@ -444,11 +472,11 @@ void ShowMenu(int x, int y) {
             break;
         case IdOpen:
             EnsureFlyout();
-            g_flyout.Show();
+            if (g_flyoutCreated) g_flyout.Show();
             break;
         case IdSettings:
             EnsureFlyout();
-            g_flyout.Show(true);
+            if (g_flyoutCreated) g_flyout.Show(true);
             break;
         case IdSoundSettings:
             ShellExecuteW(nullptr, L"open", L"ms-settings:sound", nullptr, nullptr, SW_SHOWNORMAL);
@@ -456,11 +484,15 @@ void ShowMenu(int x, int y) {
         case IdWindowsMixer:
             ShellExecuteW(nullptr, L"open", L"ms-settings:apps-volume", nullptr, nullptr, SW_SHOWNORMAL);
             break;
+        case IdLogs:
+            Log::OpenFolder();
+            break;
     }
 }
 
 LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == g_taskbarCreated && msg != 0) {  // explorer (re)started
+        LOG(L"TaskbarCreated: explorer (re)started");
         g_trayAdded = false;
         UpdateTray(true);
         g_tapRetries = 0;
@@ -470,11 +502,14 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     switch (msg) {
         case WM_APP_TRAY:
+            if (LOWORD(lp) == NIN_SELECT || LOWORD(lp) == NIN_KEYSELECT || LOWORD(lp) == WM_CONTEXTMENU ||
+                LOWORD(lp) == WM_MBUTTONUP)
+                LOG(L"tray: event %04X", LOWORD(lp));
             switch (LOWORD(lp)) {
                 case NIN_SELECT:
                 case NIN_KEYSELECT:
                     EnsureFlyout();
-                    g_flyout.Toggle();
+                    if (g_flyoutCreated) g_flyout.Toggle();
                     break;
                 case WM_CONTEXTMENU:
                     ShowMenu(GET_X_LPARAM(wp), GET_Y_LPARAM(wp));
@@ -510,10 +545,11 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_VOLUMEONE_SYSICON:  // the Windows volume icon was clicked (see tap.cpp)
+            if (wp != SYSICON_WHEEL) LOG(L"system icon: event %d (useSystemIcon=%d)", (int)wp, g_settings.useSystemVolumeIcon);
             if (!g_settings.useSystemVolumeIcon) return 0;
             if (wp == SYSICON_CLICK) {
                 EnsureFlyout();
-                g_flyout.Toggle();
+                if (g_flyoutCreated) g_flyout.Toggle();
             } else if (wp == SYSICON_MENU) {
                 // The cursor is on the taskbar, which would cover the bottom of
                 // the menu: anchor it to the edge of the work area instead.
@@ -535,16 +571,18 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 // Feedback, unless the mixer is open and already shows it.
                 EnsureFlyout();
-                if (!g_flyout.IsVisible()) g_flyout.ShowVolumeOsd(*d);
+                if (g_flyoutCreated && !g_flyout.IsVisible()) g_flyout.ShowVolumeOsd(*d);
             }
             return 0;
 
         case WM_APP_SHOW_FLYOUT:
+            LOG(L"show flyout requested (settings=%d)", (int)wp);
             EnsureFlyout();
-            g_flyout.Show(wp != 0);  // wParam 1: open in Settings (the /settings argument)
+            if (g_flyoutCreated) g_flyout.Show(wp != 0);  // wParam 1: open in Settings (the /settings argument)
             return 0;
 
         case WM_APP_TAP_DONE:
+            LOG(L"tap: sync %s (retry %d)", wp ? L"ok" : L"failed", g_tapRetries);
             g_tapBusy = false;
             if (!wp && NeedsTap() && g_tapRetries++ < 60)
                 SetTimer(hwnd, kTimerTapRetry, 2000, nullptr);  // taskbar not ready, e.g. right after sign-in
@@ -555,6 +593,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_APP_UPDATE_INSTALLED:
+            LOG(L"update: install %s", wp ? L"ok, restarting" : L"failed");
             if (wp)
                 DestroyWindow(hwnd);  // the new version is already starting
             else
@@ -600,6 +639,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     g_inst = inst;
+    Log::Init(cmdLine);
 
     // After an update the new exe is started by the old one: wait for it to
     // exit (it holds the single-instance mutex) and delete the old file.
@@ -610,7 +650,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // Single instance: a second launch just opens the running one's flyout.
     g_runningMutex = CreateMutexW(nullptr, FALSE, RUNNING_MUTEX_NAME);
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND other = FindWindowW(kHostClass, nullptr)) {
+        HWND other = FindWindowW(kHostClass, nullptr);
+        LOG(L"already running (host window %s): asking it to open, then exiting", other ? L"found" : L"NOT found");
+        if (other) {
             DWORD pid = 0;
             GetWindowThreadProcessId(other, &pid);
             AllowSetForegroundWindow(pid);
@@ -624,6 +666,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     InitDarkMenus();
     g_settings.Load();
+    LOG(L"settings: useSystemIcon=%d hideSystemIcon=%d hideQsVolume=%d startWithWindows=%d background=%d",
+        g_settings.useSystemVolumeIcon, g_settings.hideSystemVolumeIcon, g_settings.hideQuickSettingsVolume,
+        GetStartWithWindows(), background);
 
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.lpfnWndProc = HostProc;
@@ -650,6 +695,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    LOG(L"exiting (restore Windows: %d)", g_restoreOnExit);
 
     RemoveTray();
     Battery::Stop();
@@ -669,5 +715,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     }
     CloseHandle(g_runningMutex);
     CoUninitialize();
+    LOG(L"exited");
     return 0;
 }

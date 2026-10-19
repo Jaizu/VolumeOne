@@ -66,3 +66,7 @@ closeConfirm = ¿Cerrar VolumeOne y restaurar los controles de volumen de Window
 locationWarning = VolumeOne está en {0}. Si se limpia esa carpeta, se borrará.
 moveToDocuments = Mover a Documentos
 moveFailed = No se pudo mover
+logs = Registro de diagnóstico
+logsDesc = Lo que ha ido haciendo VolumeOne, para enviarlo junto a un informe de error
+openLogs = Abrir carpeta de registros
+flyoutFailed = VolumeOne no ha podido abrir su ventana. Se abrirá la carpeta de registros para que puedas enviar el log.\n\n¿Cerrar VolumeOne y restaurar Windows?

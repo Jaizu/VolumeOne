@@ -2,6 +2,16 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.6.0
+
+### New
+- **VolumeOneRemover.exe**, published with each release: removes VolumeOne completely. It closes VolumeOne, removes the startup entry, deletes `VolumeOne.exe`, its settings, custom icons and logs, and restarts Windows Explorer so the Windows volume icon and the Quick Settings volume slider are back as they were.
+- **Diagnostic log**: VolumeOne now keeps a log of what it does in `%LOCALAPPDATA%\VolumeOne\VolumeOne.log` (and `VolumeOneTap.log` for the part inside Windows Explorer), to send along with a bug report. Open its folder from Settings → **Diagnostic log** or from the tray icon's right-click menu. If VolumeOne crashes, it also leaves a `VolumeOne.dmp` there.
+- If the mixer window can't be created, VolumeOne now says so, opens the log folder and offers to close and restore Windows, instead of doing nothing when you click the icon.
+
+### Changed
+- Settings are now saved in a file, `%LOCALAPPDATA%\VolumeOne\settings.ini`, which is easy to find, back up or edit by hand (close VolumeOne first). Settings from earlier versions are moved there automatically the first time 1.6.0 starts, and the old `HKCU\Software\VolumeOne` registry key is removed.
+
 ## 1.5.0
 
 ### New

@@ -1,4 +1,5 @@
 #include "flyout.h"
+#include "log.h"
 #include "battery.h"
 #include "strings.h"
 
@@ -45,7 +46,11 @@ static LRESULT CALLBACK MouseHook(int code, WPARAM wp, LPARAM lp) {
         (wp == WM_LBUTTONDOWN || wp == WM_RBUTTONDOWN || wp == WM_MBUTTONDOWN || wp == WM_XBUTTONDOWN)) {
         auto info = (MSLLHOOKSTRUCT*)lp;
         RECT rc = g_hookOwner->PanelRect();
-        if (!PtInRect(&rc, info->pt)) PostMessageW(g_hookOwner->Hwnd(), WM_OUTSIDE_CLICK, 0, 0);
+        if (!PtInRect(&rc, info->pt)) {
+            LOG(L"flyout: click at %ld,%ld outside the panel (%ld,%ld - %ld,%ld)", info->pt.x, info->pt.y, rc.left, rc.top,
+                rc.right, rc.bottom);
+            PostMessageW(g_hookOwner->Hwnd(), WM_OUTSIDE_CLICK, 0, 0);
+        }
     }
     return CallNextHookEx(g_mouseHook, code, wp, lp);
 }
@@ -128,10 +133,16 @@ bool Flyout::Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* s
     settings_ = settings;
 
     // Multi-threaded: the compositor uses the Direct2D device from its own thread.
-    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, d2d_.GetAddressOf()))) return false;
-    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                   (IUnknown**)dwrite_.GetAddressOf())))
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, d2d_.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG(L"flyout: D2D1CreateFactory failed %08X", hr);
         return false;
+    }
+    hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)dwrite_.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG(L"flyout: DWriteCreateFactory failed %08X", hr);
+        return false;
+    }
 
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.lpfnWndProc = WndProcThunk;
@@ -143,10 +154,16 @@ bool Flyout::Create(HINSTANCE inst, HWND owner, AudioManager* audio, Settings* s
     // No redirection bitmap: everything shown is the composition visual tree.
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP, wc.lpszClassName, APP_NAME,
                             WS_POPUP | WS_CLIPCHILDREN, 0, 0, 10, 10, owner, nullptr, inst, this);
-    if (!hwnd_) return false;
+    if (!hwnd_) {
+        LOG(L"flyout: CreateWindowEx failed (%lu)", GetLastError());
+        return false;
+    }
 
     LoadPalette();
-    if (!CreateComposition()) return false;
+    if (!CreateComposition()) {
+        LOG(L"flyout: composition setup failed");
+        return false;
+    }
     ApplyWindowStyle();
     return true;
 }
@@ -212,7 +229,11 @@ bool Flyout::CreateComposition() {
         c->root.Children().InsertAtTop(c->shadow);
         c->root.Children().InsertAtTop(c->panel);
         comp_ = c;
+    } catch (const winrt::hresult_error& e) {
+        LOG(L"flyout: composition error %08X %s", (unsigned)e.code(), e.message().c_str());
+        return false;
     } catch (...) {
+        LOG(L"flyout: composition error (unknown)");
         return false;
     }
     return EnsureDevice();
@@ -226,12 +247,17 @@ bool Flyout::EnsureDevice() {
     ComPtr<ID3D11Device> d3d;
     HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
                                    D3D11_SDK_VERSION, &d3d, nullptr, nullptr);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        LOG(L"flyout: hardware D3D11 device failed %08X, trying WARP", hr);
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
                                D3D11_SDK_VERSION, &d3d, nullptr, nullptr);
+    }
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<ID2D1Device> device;
-    if (FAILED(hr) || FAILED(d3d.As(&dxgi)) || FAILED(d2d_->CreateDevice(dxgi.Get(), &device))) return false;
+    if (FAILED(hr) || FAILED(hr = d3d.As(&dxgi)) || FAILED(hr = d2d_->CreateDevice(dxgi.Get(), &device))) {
+        LOG(L"flyout: Direct3D/Direct2D device failed %08X", hr);
+        return false;
+    }
     try {
         if (!c->graphics) {
             auto interop = c->compositor.as<abi::ICompositorInterop>();
@@ -240,7 +266,11 @@ bool Flyout::EnsureDevice() {
         } else {
             winrt::check_hresult(c->graphics.as<abi::ICompositionGraphicsDeviceInterop>()->SetRenderingDevice(device.Get()));
         }
+    } catch (const winrt::hresult_error& e) {
+        LOG(L"flyout: composition graphics device failed %08X %s", (unsigned)e.code(), e.message().c_str());
+        return false;
     } catch (...) {
+        LOG(L"flyout: composition graphics device failed (unknown)");
         return false;
     }
     c->device = device;
@@ -550,7 +580,10 @@ void Flyout::Show(bool settingsView) {
     visible_ = true;
     SetTimer(hwnd_, kMeterTimer, 10, nullptr);  // level meters (one ~15.6 ms timer tick)
     ShowWindow(hwnd_, SW_SHOW);
-    SetForegroundWindow(hwnd_);
+    BOOL fg = SetForegroundWindow(hwnd_);
+    RECT panel = PanelRect();
+    LOG(L"flyout: shown (%s), panel %ld,%ld - %ld,%ld, scale %.2f, foreground %d", settingsView ? L"settings" : L"mixer",
+        panel.left, panel.top, panel.right, panel.bottom, scale_, fg);
     UpdateWindow(hwnd_);
 
     // Slide in with an ease-out curve, one step per compositor frame.
@@ -579,6 +612,7 @@ void Flyout::Show(bool settingsView) {
 
 void Flyout::Hide() {
     if (!visible_) return;
+    LOG(L"flyout: hidden");
     visible_ = false;
     deviceMenuOpen_ = false;
     menuAnim_.Set(0);
@@ -1409,6 +1443,9 @@ float Flyout::LayoutSettings(float y, bool draw) {
     toggleRows(rows, ARRAYSIZE(rows));
     divider();
 
+    buttonRow(S().logs, S().logsDesc, S().openLogs, HitKind::OpenLogs, false, true);
+    divider();
+
     // Leave: close and put Windows back as it was.
     buttonRow(S().closeAndRestore, S().closeAndRestoreDesc, S().closeAndRestoreButton, HitKind::CloseRestore, false, true);
     };
@@ -1760,6 +1797,10 @@ void Flyout::Activate(const Hit& h) {
         }
         case HitKind::MoveToDocuments:
             if (onMoveToDocuments) onMoveToDocuments();
+            return;
+        case HitKind::OpenLogs:
+            Hide();
+            if (onOpenLogs) onOpenLogs();
             return;
         case HitKind::SoundSettings:
             Hide();
@@ -2237,7 +2278,10 @@ LRESULT CALLBACK Flyout::WndProcThunk(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_ACTIVATE:
-            if (LOWORD(wp) == WA_INACTIVE && !modal_) Hide();
+            if (LOWORD(wp) == WA_INACTIVE && !modal_) {
+                if (visible_) LOG(L"flyout: lost focus");
+                Hide();
+            }
             return 0;
 
         case WM_PAINT: {
@@ -2387,6 +2431,7 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             pressed_ = Hit{};
             if (GetCapture() == hwnd_) ReleaseCapture();
             hover_ = h;
+            LOG(L"flyout: click at %d,%d, hit %d (pressed %d)", (int)x, (int)y, (int)h.kind, (int)p.kind);
             if (!wasDragging && p.kind != HitKind::None && h == p) Activate(h);
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;

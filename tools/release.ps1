@@ -1,4 +1,5 @@
-# Publishes a GitHub release for the version in src\version.h, using that
+# Publishes a GitHub release for the version in src\version.h, with
+# VolumeOne.exe and VolumeOneRemover.exe (from the same folder), using that
 # version's section of CHANGELOG.md as the release notes.
 # Usage: tools\release.ps1 [-Exe bin\VolumeOne.exe]
 param([string]$Exe = "$PSScriptRoot\..\bin\VolumeOne.exe")
@@ -10,8 +11,12 @@ $v = "{0}.{1}.{2}" -f ([regex]::Match($h, 'VERSION_MAJOR (\d+)').Groups[1].Value
                       ([regex]::Match($h, 'VERSION_MINOR (\d+)').Groups[1].Value),
                       ([regex]::Match($h, 'VERSION_PATCH (\d+)').Groups[1].Value)
 
-$exeVersion = (Get-Item $Exe).VersionInfo.ProductVersion
-if ($exeVersion -ne $v) { throw "$Exe is version $exeVersion, but src\version.h says $v. Rebuild first." }
+$Remover = Join-Path (Split-Path $Exe) "VolumeOneRemover.exe"
+foreach ($f in $Exe, $Remover) {
+    if (-not (Test-Path $f)) { throw "$f not found. Rebuild first." }
+    $exeVersion = (Get-Item $f).VersionInfo.ProductVersion
+    if ($exeVersion -ne $v) { throw "$f is version $exeVersion, but src\version.h says $v. Rebuild first." }
+}
 
 $changelog = Get-Content "$root\CHANGELOG.md" -Raw
 $m = [regex]::Match($changelog, "(?ms)^## $([regex]::Escape($v))\s*\r?\n(.*?)(?=^## |\z)")
@@ -20,4 +25,4 @@ $notes = $m.Groups[1].Value.Trim()
 $notesFile = Join-Path $env:TEMP "volumeone-notes-$v.md"
 [IO.File]::WriteAllText($notesFile, $notes, (New-Object System.Text.UTF8Encoding $false))  # no BOM
 
-gh release create "v$v" $Exe --repo Jaizu/VolumeOne --title "VolumeOne $v" --notes-file $notesFile
+gh release create "v$v" $Exe $Remover --repo Jaizu/VolumeOne --title "VolumeOne $v" --notes-file $notesFile
