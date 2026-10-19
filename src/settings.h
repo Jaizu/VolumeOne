@@ -7,15 +7,16 @@
 // Persistent settings, stored in %LOCALAPPDATA%\VolumeOne\settings.ini
 // (moved there from HKCU\Software\VolumeOne on the first run of 1.6.0).
 struct Settings {
-    bool hideSystemVolumeIcon = false;
-    bool useSystemVolumeIcon = false;  // open VolumeOne from the Windows icon, no own tray icon
-    bool hideQuickSettingsVolume = false;  // hide the volume slider in Windows' Quick Settings
+    bool hideSystemVolumeIcon = true;
+    bool useSystemVolumeIcon = true;  // open VolumeOne from the Windows icon, no own tray icon
+    bool hideQuickSettingsVolume = true;  // hide the volume slider in Windows' Quick Settings
     enum MeterColor : DWORD { MeterAccent, MeterWhite, MeterGreen, MeterCustom };
     enum DeviceNameMode : DWORD { NameBoth, NameNickname, NameTechnical };
     DWORD meterColor = MeterAccent;
     DWORD meterCustomColor = 0xFF8C00;  // 0xRRGGBB, used with MeterCustom
     DWORD meterCustomBar = 0x0078D4;    // 0xRRGGBB, the slider fill behind it with MeterCustom
     DWORD deviceNameMode = NameBoth;
+    bool nyanCat = false;  // sliders drawn as Nyan Cat with a rainbow trail
     std::vector<std::wstring> hiddenDevices;  // endpoint ids (outputs and inputs)
     // Per-device icon: "speakers", "headphones" or the path of a custom icon
     // copied into AppDataDir("icons"). Missing = automatic (from form factor).

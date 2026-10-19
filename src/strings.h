@@ -10,7 +10,7 @@
     X(useSystemIcon) X(useSystemIconDesc) X(hideQsVolume) X(hideQsVolumeDesc) X(hideSystemIcon)                \
     X(hideSystemIconDesc) X(startWithWindows) X(startWithWindowsDesc)                                          \
     X(meterColor) X(meterColorDesc) X(meterAccent) X(meterWhite) X(meterGreen) X(meterCustom)                  \
-    X(meterCustomLevel) X(meterCustomBar)                                                                      \
+    X(meterCustomLevel) X(meterCustomBar) X(nyanCat) X(nyanCatDesc)                                            \
     X(deviceName) X(deviceNameDesc) X(nameBoth) X(nameNickname) X(nameTechnical) X(renameInWindows)            \
     X(renameInWindowsDesc) X(open)                                                                             \
     X(outputDevices) X(outputDevicesDesc) X(inputDevices) X(inputDevicesDesc) X(noDevices)                     \

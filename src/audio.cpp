@@ -63,7 +63,9 @@ public:
         return S_OK;
     }
     STDMETHODIMP OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY key) override {
-        if (key == kFriendlyName) Post(WM_APP_DEVICES_CHANGED);
+        // Renaming in Sound settings changes the description; the friendly name is derived from it.
+        if (key == kFriendlyName || key == kDeviceDescription || key == kInterfaceFriendlyName)
+            Post(WM_APP_DEVICES_CHANGED);
         return S_OK;
     }
 

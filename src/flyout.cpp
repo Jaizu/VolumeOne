@@ -815,6 +815,7 @@ void Flyout::Slider(const Hit& h, float cy, float value, bool muted, float peak,
 // The slider without its hit: track, fill, level meter and thumb (dot = the
 // radius of the thumb's inner dot).
 void Flyout::SliderBar(float x0, float x1, float cy, float value, bool muted, float peak, float dot) {
+    if (settings_->nyanCat) return NyanSliderBar(x0, x1, cy, value, muted, peak, dot);
     float tx = x0 + std::clamp(value, 0.0f, 1.0f) * (x1 - x0);
     // With the green meter the accent fill would clash, so it turns neutral.
     D2D1_COLOR_F fill = muted ? pal_.textTertiary : SliderFill();
@@ -834,6 +835,93 @@ void Flyout::SliderBar(float x0, float x1, float cy, float value, bool muted, fl
     rt_->DrawEllipse(D2D1::Ellipse({tx, cy}, 9.5f, 9.5f), brush_.Get(), 1);
     brush_->SetColor(fill);
     rt_->FillEllipse(D2D1::Ellipse({tx, cy}, dot, dot), brush_.Get());
+}
+
+// Nyan Cat steps every 140 ms: the rainbow waves and the cat bobs.
+static int NyanFrame() { return (int)(NowMs() / 140); }
+
+// The Nyan Cat slider: a rainbow trail for the fill, lit up to the level
+// meter, and the cat (pixel art, 26x15) as the thumb.
+void Flyout::NyanSliderBar(float x0, float x1, float cy, float value, bool muted, float peak, float dot) {
+    static const char* const kCat[] = {
+        "...KKKKKKKKKKKKKKKKK......",
+        "...KTTTTTTTTTTTTTTTK......",
+        "...KTPPPPPPPSPPPPPTK......",
+        "...KTPPSPPPPPPPPPPTK......",
+        "...KTPPPPPPPPPPPKKTK...KK.",
+        "...KTPPPPPPPPPPKGGKK..KGGK",
+        "KK.KTPPPPSPPPPPKGGGKKKGGGK",
+        "KGGKTPPPPPPPPPPKGGGGGGGGGK",
+        ".KGKTPPPPPPPPPSKGWKGGGWKGK",
+        "..KKTPSPPPPPPPPKGKKGKGKKGK",
+        "...KTPPPPPPSPPPKRRGKKKGRRK",
+        "...KTTTTTTTTTTTKGGGGGGGGGK",
+        "...KKKKKKKKKKKKKKKKKKKKKK.",
+        "....KGK.KGK....KGK..KGK...",
+        "....KKK.KKK....KKK..KKK...",
+    };
+    static const DWORD kRainbow[] = {0xFF0000, 0xFF9900, 0xFFFF00, 0x33FF00, 0x0099FF, 0x6633FF};
+    auto catColor = [](char c) -> DWORD {
+        switch (c) {
+            case 'K': return 0x000000;
+            case 'T': return 0xFFCC99;  // crust
+            case 'P': return 0xFF99FF;  // frosting
+            case 'S': return 0xFF3399;  // sprinkles
+            case 'G': return 0x999999;
+            case 'W': return 0xFFFFFF;
+            case 'R': return 0xFF9999;  // cheeks
+        }
+        return 0;
+    };
+
+    float tx = x0 + std::clamp(value, 0.0f, 1.0f) * (x1 - x0);
+    float px = std::min(x0 + std::clamp(peak, 0.0f, 1.0f) * (x1 - x0), tx);
+    int frame = NyanFrame();
+    float alpha = muted ? 0.4f : 1.0f;
+    Fill({x0, cy - 2, x1, cy + 2}, pal_.trackOff, 2);
+
+    // Six stripes in short steps, from the cat back, that go up and down.
+    D2D1_ANTIALIAS_MODE aa = rt_->GetAntialiasMode();
+    rt_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);  // no seams between stripes
+    const float stripe = 2, step = 6;
+    auto rainbow = [&](float right, float a) {
+        if (right <= x0) return;
+        rt_->PushAxisAlignedClip({x0, cy - 10, right, cy + 10}, D2D1_ANTIALIAS_MODE_ALIASED);
+        int i = 0;
+        for (float sx = tx; sx > x0 - step; sx -= step, i++) {
+            float top = cy - 3 * stripe + (((i + frame) & 1) ? -1.0f : 1.0f);
+            for (int s = 0; s < 6; s++) {
+                brush_->SetColor(Rgba(kRainbow[s], a));
+                rt_->FillRectangle({sx - step, top + s * stripe, sx, top + (s + 1) * stripe}, brush_.Get());
+            }
+        }
+        rt_->PopAxisAlignedClip();
+    };
+    // Dim up to the volume, bright up to the level meter.
+    if (muted) {
+        rainbow(tx, 0.25f);
+    } else {
+        rainbow(tx, 0.4f);
+        rainbow(px, 1.0f);
+    }
+
+    // The cat, centred on the thumb position; grows on hover like the dot.
+    float p = 1.1f * dot / 6, w = 26 * p, h = 15 * p;
+    float left = tx - w / 2, top = cy - h / 2 + ((frame & 2) ? -p : 0);
+    for (int r = 0; r < 15; r++) {
+        // Runs of one colour in a row as one rectangle.
+        for (int c = 0; c < 26;) {
+            char ch = kCat[r][c];
+            int e = c + 1;
+            while (e < 26 && kCat[r][e] == ch) e++;
+            if (ch != '.') {
+                brush_->SetColor(Rgba(catColor(ch), alpha));
+                rt_->FillRectangle({left + c * p, top + r * p, left + e * p, top + (r + 1) * p}, brush_.Get());
+            }
+            c = e;
+        }
+    }
+    rt_->SetAntialiasMode(aa);
 }
 
 void Flyout::ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw) {
@@ -1295,22 +1383,14 @@ float Flyout::LayoutSettings(float y, bool draw) {
     };
 
     auto personalBody = [&] {
-    bool useSystem = settings_->useSystemVolumeIcon;
-    Row rows[] = {
-        {HitKind::ToggleUseSystemIcon, S().useSystemIcon, S().useSystemIconDesc, useSystem, true},
-        // Hiding the Windows icon makes no sense while it is VolumeOne's icon.
-        {HitKind::ToggleHideIcon, S().hideSystemIcon, S().hideSystemIconDesc, settings_->hideSystemVolumeIcon && !useSystem,
-         !useSystem},
-    };
-    toggleRows(rows, ARRAYSIZE(rows));
-    divider();
-
     // Level meter colour: four choices, plus hex fields for "custom" (the
     // meter and the slider bar behind it), and an animated preview.
     {
         bool custom = settings_->meterColor == Settings::MeterCustom;
+        bool picker = custom && pickerField_ >= 0;
+        const float kSvH = 120, kHueH = 14, kPickerH = kSvH + 10 + kHueH + 8;
         float dh = TextHeight(S().meterColorDesc, fDesc_.Get(), x1 - x0 - 32);
-        float h = 12 + 20 + dh + 10 + 32 + (custom ? 8 + 18 + 32 : 0) + 8 + 40 + 12;
+        float h = 12 + 20 + dh + 10 + 32 + (custom ? 8 + 18 + 32 : 0) + (picker ? kPickerH : 0) + 8 + 40 + 12;
         if (draw) {
             Text(S().meterColor, fBody_.Get(), {textX, y + 12, x1 - 16, y + 32}, pal_.text);
             Text(S().meterColorDesc, fDesc_.Get(), {textX, y + 32, x1 - 16, y + 32 + dh}, pal_.textSecondary);
@@ -1338,6 +1418,9 @@ float Flyout::LayoutSettings(float y, bool draw) {
             for (int i = 0; i < 2; i++) {
                 float fx = textX + i * (fw + gap), fy = py + 18;
                 hexRect_[i] = {fx, fy, fx + fw, fy + 32};
+                // Swatch of the colour, right of the text; opens the picker.
+                Hit swatch{HitKind::ColorSwatch, i, -1, {fx + fw - 30, fy + 4, fx + fw - 6, fy + 28}};
+                hits_.push_back(swatch);
                 if (!draw) continue;
                 const D2D1_RECT_F& r = hexRect_[i];
                 Text(fieldLabels[i], fCaption_.Get(), {fx, py, fx + fw, py + 16}, pal_.textSecondary);
@@ -1345,13 +1428,23 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 Stroke(r, pal_.cardStroke, 4);
                 Fill({r.left + 4, r.bottom - 2, r.right - 4, r.bottom - 1}, pal_.accent);
                 Text(L"#", fBody_.Get(), {r.left + 10, fy, r.left + 24, fy + 32}, pal_.textSecondary);
-                // Swatch of the colour, right of the text.
+                if (hover_ == swatch) Fill(swatch.rect, pal_.subtleHover, 4);
                 D2D1_RECT_F sw = {r.right - 26, fy + 8, r.right - 10, fy + 24};
                 Fill(sw, Rgba(colors[i]), 3);
-                Stroke(sw, pal_.cardStroke, 3);
+                bool open = pickerField_ == i;
+                Stroke(sw, open ? pal_.accent : pal_.cardStroke, 3, open ? 2.0f : 1.0f);
             }
             hexVisible_ = !sectionAnim_[1].Running();
             py += 18 + 32 + 8;
+            if (picker) {
+                D2D1_RECT_F sv = {textX, py, x1 - 16, py + kSvH};
+                D2D1_RECT_F hue = {textX, py + kSvH + 10, x1 - 16, py + kSvH + 10 + kHueH};
+                // A little extra around the hue bar, it's thin.
+                hits_.push_back(Hit{HitKind::ColorSV, pickerField_, -1, sv});
+                hits_.push_back(Hit{HitKind::ColorHue, pickerField_, -1, {hue.left - 4, hue.top - 4, hue.right + 4, hue.bottom + 4}});
+                if (draw) DrawColorPicker(sv, hue);
+                py += kPickerH;
+            }
         }
         // Preview: a slider at 75 % with a made-up level bouncing over it.
         previewVisible_ = true;
@@ -1365,6 +1458,11 @@ float Flyout::LayoutSettings(float y, bool draw) {
             SliderBar(pr.left + 16, pr.right - 16, py + 20, 0.75f, false, std::clamp(level, 0.0f, 1.0f) * 0.75f, 6);
         }
         y += h;
+    }
+    divider();
+    {
+        Row rows[] = {{HitKind::ToggleNyan, S().nyanCat, S().nyanCatDesc, settings_->nyanCat, true}};
+        toggleRows(rows, ARRAYSIZE(rows));
     }
     divider();
 
@@ -1436,7 +1534,12 @@ float Flyout::LayoutSettings(float y, bool draw) {
     };
 
     auto generalBody = [&] {
+    bool useSystem = settings_->useSystemVolumeIcon;
     Row rows[] = {
+        {HitKind::ToggleUseSystemIcon, S().useSystemIcon, S().useSystemIconDesc, useSystem, true},
+        // Hiding the Windows icon makes no sense while it is VolumeOne's icon.
+        {HitKind::ToggleHideIcon, S().hideSystemIcon, S().hideSystemIconDesc, settings_->hideSystemVolumeIcon && !useSystem,
+         !useSystem},
         {HitKind::ToggleHideQs, S().hideQsVolume, S().hideQsVolumeDesc, settings_->hideQuickSettingsVolume, true},
         {HitKind::ToggleStartup, S().startWithWindows, S().startWithWindowsDesc, startup_, true},
     };
@@ -1784,6 +1887,11 @@ void Flyout::Activate(const Hit& h) {
             Reposition(false);  // the custom colour field adds a row
             if (h.device == Settings::MeterCustom && hexEdit_[0]) SetFocus(hexEdit_[0]);
             break;
+        case HitKind::ColorSwatch:
+            pickerField_ = pickerField_ == h.device ? -1 : h.device;
+            if (pickerField_ >= 0) SyncPickerFromColor();
+            Reposition(false);  // the picker adds rows
+            break;
         case HitKind::CloseRestore: {
             modal_ = true;
             int answer = MessageBoxW(hwnd_, S().closeConfirm, S().closeConfirmTitle, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
@@ -1806,6 +1914,10 @@ void Flyout::Activate(const Hit& h) {
             Hide();
             ShellExecuteW(nullptr, L"open", L"ms-settings:sound", nullptr, nullptr, SW_SHOWNORMAL);
             return;
+        case HitKind::ToggleNyan:
+            settings_->nyanCat = !settings_->nyanCat;
+            settings_->Save();
+            break;
         case HitKind::ToggleHideIcon:
             settings_->hideSystemVolumeIcon = !settings_->hideSystemVolumeIcon;
             settings_->Save();
@@ -2049,6 +2161,101 @@ void Flyout::UpdateHexEdit() {
         int w = panelX_ + (int)std::lround((r.right - 32) * scale_) - x;
         SetWindowPos(edit, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
+}
+
+static DWORD HsvToRgb(float h, float s, float v) {
+    float c = v * s, hp = std::fmod(h, 360.0f) / 60.0f, x = c * (1 - std::fabs(std::fmod(hp, 2.0f) - 1));
+    float r = 0, g = 0, b = 0;
+    if (hp < 1) r = c, g = x;
+    else if (hp < 2) r = x, g = c;
+    else if (hp < 3) g = c, b = x;
+    else if (hp < 4) g = x, b = c;
+    else if (hp < 5) r = x, b = c;
+    else r = c, b = x;
+    float m = v - c;
+    auto byte = [&](float f) { return (DWORD)std::lround(std::clamp(f + m, 0.0f, 1.0f) * 255); };
+    return (byte(r) << 16) | (byte(g) << 8) | byte(b);
+}
+
+// The picker's position from the colour in its field. Hue (and saturation, for
+// black) stay where they were when the colour doesn't define them.
+void Flyout::SyncPickerFromColor() {
+    if (pickerField_ < 0) return;
+    DWORD c = pickerField_ == 0 ? settings_->meterCustomColor : settings_->meterCustomBar;
+    float r = ((c >> 16) & 0xFF) / 255.0f, g = ((c >> 8) & 0xFF) / 255.0f, b = (c & 0xFF) / 255.0f;
+    float mx = std::max({r, g, b}), mn = std::min({r, g, b}), d = mx - mn;
+    pickerV_ = mx;
+    if (mx > 0) pickerS_ = d / mx;
+    if (d > 0) {
+        float h = mx == r ? std::fmod((g - b) / d, 6.0f) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4;
+        pickerH_ = h * 60 < 0 ? h * 60 + 360 : h * 60;
+    }
+}
+
+// Dragging in the square or along the hue bar. Saved when the drag ends.
+void Flyout::SetPickerValue(const Hit& h, float x, float y) {
+    if (h.device < 0 || h.device > 1) return;
+    const D2D1_RECT_F& r = h.rect;
+    if (h.kind == HitKind::ColorSV) {
+        pickerS_ = std::clamp((x - r.left) / (r.right - r.left), 0.0f, 1.0f);
+        pickerV_ = 1 - std::clamp((y - r.top) / (r.bottom - r.top), 0.0f, 1.0f);
+    } else {
+        // The hit is 4 DIPs wider than the bar on each side.
+        pickerH_ = std::clamp((x - r.left - 4) / (r.right - r.left - 8), 0.0f, 1.0f) * 359.9f;
+    }
+    DWORD c = HsvToRgb(pickerH_, pickerS_, pickerV_);
+    (h.device == 0 ? settings_->meterCustomColor : settings_->meterCustomBar) = c;
+    pal_.meter = MeterColorFor((Settings::MeterColor)settings_->meterColor);
+    if (HWND edit = hexEdit_[h.device]) {
+        wchar_t text[8];
+        swprintf_s(text, L"%06X", c);
+        pickerSyncing_ = true;
+        SetWindowTextW(edit, text);
+        pickerSyncing_ = false;
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void Flyout::DrawColorPicker(const D2D1_RECT_F& sv, const D2D1_RECT_F& hue) {
+    auto gradient = [&](const D2D1_GRADIENT_STOP* stops, UINT n, D2D1_POINT_2F a, D2D1_POINT_2F b) {
+        ComPtr<ID2D1GradientStopCollection> coll;
+        ComPtr<ID2D1LinearGradientBrush> brush;
+        if (SUCCEEDED(rt_->CreateGradientStopCollection(stops, n, &coll)))
+            rt_->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(a, b), coll.Get(), &brush);
+        return brush;
+    };
+
+    // Square: the hue, white towards the left, black towards the bottom.
+    D2D1_ROUNDED_RECT svr = {sv, 4, 4};
+    brush_->SetColor(Rgba(HsvToRgb(pickerH_, 1, 1)));
+    rt_->FillRoundedRectangle(svr, brush_.Get());
+    D2D1_GRADIENT_STOP white[] = {{0, D2D1::ColorF(1, 1, 1, 1)}, {1, D2D1::ColorF(1, 1, 1, 0)}};
+    if (auto b = gradient(white, 2, {sv.left, sv.top}, {sv.right, sv.top})) rt_->FillRoundedRectangle(svr, b.Get());
+    D2D1_GRADIENT_STOP black[] = {{0, D2D1::ColorF(0, 0, 0, 0)}, {1, D2D1::ColorF(0, 0, 0, 1)}};
+    if (auto b = gradient(black, 2, {sv.left, sv.top}, {sv.left, sv.bottom})) rt_->FillRoundedRectangle(svr, b.Get());
+    Stroke(sv, pal_.cardStroke, 4);
+
+    // Hue bar: red, yellow, green, cyan, blue, magenta, red.
+    D2D1_GRADIENT_STOP hues[7];
+    for (int i = 0; i < 7; i++) hues[i] = {i / 6.0f, Rgba(HsvToRgb(i * 60.0f, 1, 1))};
+    float rad = (hue.bottom - hue.top) / 2;
+    if (auto b = gradient(hues, 7, {hue.left, hue.top}, {hue.right, hue.top}))
+        rt_->FillRoundedRectangle({hue, rad, rad}, b.Get());
+    Stroke(hue, pal_.cardStroke, rad);
+
+    // Handles: white rings with a thin dark edge, filled with their colour.
+    auto handle = [&](D2D1_POINT_2F p, float r, DWORD color) {
+        brush_->SetColor(Rgba(color));
+        rt_->FillEllipse(D2D1::Ellipse(p, r, r), brush_.Get());
+        brush_->SetColor(Rgba(0xFFFFFF));
+        rt_->DrawEllipse(D2D1::Ellipse(p, r, r), brush_.Get(), 2.0f);
+        brush_->SetColor(Rgba(0x000000, 0.35f));
+        rt_->DrawEllipse(D2D1::Ellipse(p, r + 1.5f, r + 1.5f), brush_.Get(), 1.0f);
+    };
+    handle({sv.left + pickerS_ * (sv.right - sv.left), sv.top + (1 - pickerV_) * (sv.bottom - sv.top)}, 6,
+           HsvToRgb(pickerH_, pickerS_, pickerV_));
+    handle({hue.left + pickerH_ / 360.0f * (hue.right - hue.left), (hue.top + hue.bottom) / 2}, rad - 1,
+           HsvToRgb(pickerH_, 1, 1));
 }
 
 // Hex fields: only hex digits get in. A pasted colour drops its "#" (or
@@ -2295,14 +2502,16 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             return 1;
 
         case WM_COMMAND:  // custom colour typed in a hex field
-            if (HIWORD(wp) == EN_CHANGE && lp && ((HWND)lp == hexEdit_[0] || (HWND)lp == hexEdit_[1])) {
+            if (HIWORD(wp) == EN_CHANGE && lp && !pickerSyncing_ && ((HWND)lp == hexEdit_[0] || (HWND)lp == hexEdit_[1])) {
+                int field = (HWND)lp == hexEdit_[0] ? 0 : 1;
                 wchar_t text[16] = {};
                 GetWindowTextW((HWND)lp, text, ARRAYSIZE(text));
                 wchar_t* end = nullptr;
                 unsigned long v = wcstoul(text, &end, 16);
                 if (wcslen(text) == 6 && end && *end == 0) {
-                    ((HWND)lp == hexEdit_[0] ? settings_->meterCustomColor : settings_->meterCustomBar) = v;
+                    (field == 0 ? settings_->meterCustomColor : settings_->meterCustomBar) = v;
                     settings_->Save();
+                    if (field == pickerField_) SyncPickerFromColor();
                     pal_.meter = MeterColorFor((Settings::MeterColor)settings_->meterColor);
                     InvalidateRect(hwnd_, nullptr, FALSE);
                 }
@@ -2358,8 +2567,13 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             // Level meters; animations have their own frame pump.
             if (wp == kMeterTimer && visible_ && !pumping_) {
                 // The mixer's meters, or the meter preview in Personalization.
-                if (view_ == View::Mixer ? audio_->UpdatePeaks() : previewVisible_ && sectionOpen_[1])
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                bool redraw = view_ == View::Mixer ? audio_->UpdatePeaks() : previewVisible_ && sectionOpen_[1];
+                // Nyan Cat moves on its own, a step at a time.
+                if (settings_->nyanCat && view_ == View::Mixer && NyanFrame() != nyanFrame_) {
+                    nyanFrame_ = NyanFrame();
+                    redraw = true;
+                }
+                if (redraw) InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;
 
@@ -2377,7 +2591,10 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
                 tracking_ = true;
             }
             if (dragging_) {
-                SetSliderValue(pressed_, x);
+                if (pressed_.kind == HitKind::ColorSV || pressed_.kind == HitKind::ColorHue)
+                    SetPickerValue(pressed_, x, y);
+                else
+                    SetSliderValue(pressed_, x);
                 return 0;
             }
             Hit h = HitTest(x, y);
@@ -2419,6 +2636,10 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
                 dragging_ = true;
                 SetSliderValue(pressed_, x);
             }
+            if (pressed_.kind == HitKind::ColorSV || pressed_.kind == HitKind::ColorHue) {
+                dragging_ = true;
+                SetPickerValue(pressed_, x, y);
+            }
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
         }
@@ -2428,6 +2649,7 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             Hit p = pressed_;
             bool wasDragging = dragging_;
             dragging_ = false;
+            if (wasDragging && (p.kind == HitKind::ColorSV || p.kind == HitKind::ColorHue)) settings_->Save();
             pressed_ = Hit{};
             if (GetCapture() == hwnd_) ReleaseCapture();
             hover_ = h;
@@ -2437,6 +2659,7 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_CAPTURECHANGED:
+            if (dragging_ && (pressed_.kind == HitKind::ColorSV || pressed_.kind == HitKind::ColorHue)) settings_->Save();
             dragging_ = false;
             return 0;
 

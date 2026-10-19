@@ -98,8 +98,11 @@ void Settings::Load() {
     std::wstring path = SettingsPath();
     if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         // First run of 1.6.0 or later: move the old registry settings to the file.
-        if (LoadLegacy(*this)) {
-            Save();
+        // The file is written either way: the dll reads it and a missing key is
+        // 0 there, which isn't the default for every setting.
+        bool legacy = LoadLegacy(*this);
+        Save();
+        if (legacy) {
             if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 RegDeleteTreeW(HKEY_CURRENT_USER, APP_LEGACY_REG_KEY);
                 RegDeleteKeyW(HKEY_CURRENT_USER, APP_LEGACY_REG_KEY);
@@ -118,6 +121,7 @@ void Settings::Load() {
     ReadColor(path, L"MeterCustomBar", meterCustomBar);
     value = (DWORD)GetPrivateProfileIntW(SETTINGS_SECTION, L"DeviceNameMode", deviceNameMode, path.c_str());
     if (value <= NameTechnical) deviceNameMode = value;
+    ReadBool(path, L"NyanCat", nyanCat);
 
     hiddenDevices.clear();
     for (const auto& [name, id] : ReadSection(path, L"HiddenDevices"))
@@ -147,6 +151,7 @@ void Settings::Save() const {
     line(L"MeterCustomColor", color(meterCustomColor));
     line(L"MeterCustomBar", color(meterCustomBar));
     line(L"DeviceNameMode", std::to_wstring(deviceNameMode));
+    line(L"NyanCat", nyanCat ? L"1" : L"0");
     text += L"\r\n[HiddenDevices]\r\n";
     for (size_t i = 0; i < hiddenDevices.size(); i++) line(L"Device" + std::to_wstring(i + 1), hiddenDevices[i]);
     text += L"\r\n; speakers, headphones or the path of an image\r\n[DeviceIcons]\r\n";

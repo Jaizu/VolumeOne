@@ -2,6 +2,18 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.7.0
+
+### New
+- **Colour picker** for the custom level meter colours: click the swatch next to a hex field to open a saturation/brightness square and a hue bar under it. The hex field and the preview follow as you drag.
+- **Nyan Cat sliders** (Settings → Personalization): the volume sliders get an animated rainbow trail, lit up to the level meter, and Nyan Cat as the thumb.
+
+### Changed
+- On a new install, VolumeOne opens from the Windows volume icon and hides the Quick Settings volume slider by default. Existing settings are kept as they are when updating.
+
+### Fixed
+- Renaming a device in Windows Sound settings now updates its name in VolumeOne right away.
+
 ## 1.6.0
 
 ### New

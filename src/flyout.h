@@ -96,7 +96,7 @@ private:
     enum class HitKind {
         None, Mute, Slider, Collapse, DeviceMenu, SelectDevice, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
         ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
-        CloseRestore, MoveToDocuments, OpenLogs
+        CloseRestore, MoveToDocuments, OpenLogs, ColorSwatch, ColorSV, ColorHue, ToggleNyan
     };
     struct Hit {
         HitKind kind = HitKind::None;
@@ -177,6 +177,8 @@ private:
     void Button(const Hit& h, bool draw, float radius = 4);
     void Slider(const Hit& h, float cy, float value, bool muted, float peak, bool draw);
     void SliderBar(float x0, float x1, float cy, float value, bool muted, float peak, float dot);
+    void NyanSliderBar(float x0, float x1, float cy, float value, bool muted, float peak, float dot);
+    int nyanFrame_ = 0;  // the Nyan Cat animation step last drawn
     void VolumeIcon(float volume, bool muted, const D2D1_RECT_F& r);
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
@@ -257,6 +259,14 @@ private:
     bool hexVisible_ = false;
     bool previewVisible_ = false;  // the animated meter preview in Personalization
     static LRESULT CALLBACK HexEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+    // Colour picker under the hex fields, opened from a field's swatch:
+    // a saturation/brightness square and a hue bar.
+    int pickerField_ = -1;  // hex field it edits, -1 = closed
+    float pickerH_ = 0, pickerS_ = 0, pickerV_ = 0;  // hue 0..360, the rest 0..1
+    bool pickerSyncing_ = false;  // writing the picked colour into the hex field
+    void SyncPickerFromColor();
+    void SetPickerValue(const Hit& h, float x, float y);
+    void DrawColorPicker(const D2D1_RECT_F& sv, const D2D1_RECT_F& hue);
 
     HWND osd_ = nullptr;
     ComPtr<ID2D1HwndRenderTarget> osdRt_;
