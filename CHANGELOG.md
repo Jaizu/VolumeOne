@@ -2,12 +2,28 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
-## Unreleased
+## 1.4.0
+
+### New
+- **Output selector** in the mixer: the flyout shows the current output, and clicking its name opens a list of your other outputs (the list slides open above it) so you can switch the default device.
+- The device volume slider is now at the bottom of the mixer. The app list opens and closes from the button next to it, with an animation.
+- Settings is split into collapsible sections that animate open and closed: **Settings**, **Personalization**, **Inputs** and **Outputs**.
+- The flyout grows and shrinks smoothly when content opens or closes. It also has a drop shadow and a thin outline, like Quick Settings.
+- **Device names** (Settings → Personalization): show your audio devices by the name you gave them in Windows Sound settings ("SHAKERS"), by the hardware's name ("AB13X USB Audio"), or both, as Windows does. Applies to the mixer, Settings, the volume pop-up and the right-click menu. A button opens Sound settings to rename them.
+- The custom level meter colour also sets the colour of the slider bar behind the meter, and an animated preview under the colour options shows how it looks.
+- Pasting a colour like `#47D1A8` into a hex field drops the `#` instead of cutting off the last digit.
+
+### Changed
+- **Close and restore Windows** keeps your settings and custom device icons, so closing VolumeOne this way and opening it again no longer resets them. It still brings back the Windows volume controls and removes the startup entry.
+- Updates are checked as soon as VolumeOne starts instead of 15 seconds later.
+- The Updates card is at the bottom of Settings and is always open.
 
 ### Fixed
+- Reopening the flyout after closing it in Settings no longer flashes the Settings view for a moment.
 - Switching between the mixer and Settings is smooth: animations now run at the display's refresh rate instead of stuttering at about 30 fps.
 - The first time Settings opens is no longer slow; it is prepared in the background when the flyout appears.
 - Launching VolumeOne with `/settings` while the flyout is open now animates to Settings.
+- With **Remove volume from Quick Settings** on, the Quick Settings panel no longer keeps an empty gap where the volume slider was.
 
 ## 1.3.0
 

@@ -25,7 +25,8 @@ enum class FormFactor { Speakers, Headphones, Other };
 
 struct AudioDevice {
     std::wstring id;
-    std::wstring name;
+    std::wstring name;           // as named in Windows Sound settings ("Speakers")
+    std::wstring technicalName;  // the adapter's driver name ("Realtek(R) Audio")
     FormFactor formFactor = FormFactor::Speakers;
     bool isDefault = false;
     bool playing = false;  // has an active session (only known while sessions are tracked)
@@ -42,6 +43,7 @@ struct AudioDevice {
 struct InputDevice {
     std::wstring id;
     std::wstring name;
+    std::wstring technicalName;
     bool isDefault = false;
 };
 

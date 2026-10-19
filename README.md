@@ -8,7 +8,7 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 ## Features
 
 - **Per-app volume** for every output device, in a flyout styled like Windows 11 Quick Settings: acrylic backdrop, rounded corners, Fluent sliders, your accent colour, light/dark mode
-- **Collapsible devices**: click a device's header to collapse or expand it. Devices that aren't the default and aren't playing anything start collapsed
+- **Output selector** at the top of the mixer; the app list collapses from the button beside the device volume slider. The device volume stays visible at the bottom
 - **Hide devices** you don't want to see (for example bass shakers for sim racing), for outputs and inputs. Settings → Output devices / Input devices
 - **Device icons**: pick speakers, headphones or your own `.ico`/`.png` per output device (click the icon in Settings). Custom icons are copied to `%LOCALAPPDATA%\VolumeOne\icons`, so they keep working if you delete the original
 - **Switch the default microphone** from the tray icon's right-click menu
@@ -18,7 +18,7 @@ A small, fast volume mixer for the Windows 11 notification area. Something like 
 - **Start with Windows** (toggle)
 - **Built-in updater**: checks GitHub releases at startup and once a day, and updates itself in place
 - Click a speaker or app icon to mute it. Scroll over a row to change its volume. Middle-click the tray icon to mute the default device
-- **Close and restore Windows** from Settings if you stop using it: everything VolumeOne changed goes back
+- **Close and restore Windows** from Settings to close it: everything VolumeOne changed in Windows goes back, and your settings are kept for next time
 - English and Spanish, following the Windows language. Translations are plain text files in [`lang/`](lang/README.md)
 - A single `.exe`, no installer
 

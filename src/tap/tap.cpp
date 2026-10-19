@@ -367,6 +367,17 @@ int CountSliders(const wux::DependencyObject& node, int depth = 0) {
     return n;
 }
 
+// ControlCenterView keeps its old measured height when the row collapses (the
+// panel stays as tall, with a gap above the footer), so re-measure the chain
+// up to the panel's region.
+void InvalidateQsLayout(const wux::DependencyObject& from) {
+    for (wux::DependencyObject n = from; n; n = wux::Media::VisualTreeHelper::GetParent(n)) {
+        if (auto u = n.try_as<wux::UIElement>()) u.InvalidateMeasure();
+        auto fe = n.try_as<wux::FrameworkElement>();
+        if (fe && fe.Name() == L"ControlCenterRegion") break;
+    }
+}
+
 winrt::weak_ref<wux::FrameworkElement> g_qsButton;
 winrt::weak_ref<wux::UIElement> g_qsHidden;
 CoreDispatcher g_qsDispatcher{nullptr};
@@ -392,9 +403,11 @@ void EvaluateQs() {
     if (g_hideQs) {
         if (row.Visibility() != wux::Visibility::Collapsed) row.Visibility(wux::Visibility::Collapsed);
         g_qsHidden = row;
+        InvalidateQsLayout(row);
     } else if (auto hidden = g_qsHidden.get()) {
         hidden.Visibility(wux::Visibility::Visible);
         g_qsHidden = nullptr;
+        InvalidateQsLayout(hidden);
     }
 }
 

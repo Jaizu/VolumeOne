@@ -20,6 +20,7 @@ struct Palette {
     D2D1_COLOR_F accent, onAccent;
     D2D1_COLOR_F toggleOffFill;
     D2D1_COLOR_F tint;  // painted over the acrylic, like WinUI's acrylic tint layer
+    D2D1_COLOR_F border;  // panel outline
 };
 
 // Owned by the host; the flyout shows it and asks for checks/installs.
@@ -77,6 +78,7 @@ public:
     void Hide();
     bool IsVisible() const { return visible_; }
     HWND Hwnd() const { return hwnd_; }
+    RECT PanelRect() const;  // the visible panel, screen pixels (the window is bigger)
 
     // Called by the host when Core Audio reports changes.
     void OnAudioStructureChanged();
@@ -91,8 +93,8 @@ public:
 private:
     enum class View { Mixer, Settings };
     enum class HitKind {
-        None, Mute, Slider, Collapse, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
-        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, SectionOutputs, SectionInputs, MeterOption,
+        None, Mute, Slider, Collapse, DeviceMenu, SelectDevice, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
+        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
         CloseRestore, MoveToDocuments
     };
     struct Hit {
@@ -114,6 +116,8 @@ private:
     // transition; the back arrow turns from left to down the same way.
     void DrawGear(const D2D1_RECT_F& r, const D2D1_COLOR_F& c);
     void DrawRotatedGlyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float degrees);
+    void DrawChevron(const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float open);
+    ID2D1StrokeStyle* RoundStroke();
     void GoToView(View v);   // animates the footer icon, then switches
     void SwitchView(View v);
     bool Animating() const;
@@ -125,14 +129,39 @@ private:
     void ApplyWindowStyle();
     void LoadPalette();
     bool EnsureResources();
-    void DiscardTarget();
     void Render();
     float Layout(bool draw);
     float LayoutMixer(float y, bool draw);
     float LayoutSettings(float y, bool draw);
     void LayoutFooter(float top, bool draw);
     void Reposition(bool animate);
+    // `full * fraction` in whole device pixels: the panel is whole pixels
+    // tall, so content under an opening section moves in whole pixels too
+    // instead of shimmering.
+    float PixelPart(float full, float fraction) const {
+        if (fraction >= 1) return full;
+        return std::round(full * fraction * scale_) / scale_;
+    }
+
+    // Windows.UI.Composition visual tree (see flyout.cpp).
+    struct Composition;
+    Composition* comp_ = nullptr;  // lives as long as the app
+    bool CreateComposition();
+    bool EnsureDevice();
+    void UpdateBackdrop();
+    void UpdateShadowMask();
+    void PlacePanel(int heightPx);
+    void UpdateRegion(bool settleLater);
+    D2D1_POINT_2F ToPanel(int clientX, int clientY) const;
+    int panelX_ = 0, panelY_ = 0, panelW_ = 0, panelH_ = 0;  // client pixels
+    int panelEdge_ = 0;       // y of the edge that stays put (next to the taskbar)
+    bool anchorTop_ = false;  // taskbar at the top: the panel grows down
+    RECT region_{};           // current input region
+    D2D1::Matrix3x2F drawBase_ = D2D1::Matrix3x2F::Identity();  // surface offset
     std::vector<int> VisibleDevices();
+    template <class D> std::wstring DeviceName(const D& d) const {
+        return settings_->DisplayDeviceName(d.name, d.technicalName);
+    }
     bool IsExpanded(const AudioDevice& d) const;
     void PickIcon(int device);
 
@@ -146,6 +175,7 @@ private:
     void Glyph(wchar_t g, float size, const D2D1_RECT_F& r, const D2D1_COLOR_F& c);
     void Button(const Hit& h, bool draw, float radius = 4);
     void Slider(const Hit& h, float cy, float value, bool muted, float peak, bool draw);
+    void SliderBar(float x0, float x1, float cy, float value, bool muted, float peak, float dot);
     void VolumeIcon(float volume, bool muted, const D2D1_RECT_F& r);
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
@@ -167,13 +197,21 @@ private:
     const UpdateState* update_ = nullptr;
     bool visible_ = false;
     bool modal_ = false;  // a menu or file dialog is open: don't hide on deactivate
+    bool deviceMenuOpen_ = false;
+    Anim menuAnim_;
+    void SetDeviceMenu(bool open);
+    D2D1_RECT_F switchIconRect_{};  // the output selector's switch icon, for its tooltip
+    bool tipArmed_ = false, tipShown_ = false, tipBlocked_ = false;
+    void DrawTooltip();
+    void HideTooltip();
     std::map<std::wstring, bool> expanded_;  // user's collapse/expand choices, by device id
     ULONGLONG lastHideTick_ = 0;
     View view_ = View::Mixer;
     bool startup_ = false;
 
     float scale_ = 1.0f;
-    float winH_ = 100000.0f;  // window height in DIPs
+    float winH_ = 100000.0f;  // panel height in DIPs
+    float maxH_ = 100000.0f;  // tallest the panel can be on its monitor
     float contentBottom_ = 0;
     float scroll_ = 0, maxScroll_ = 0;
 
@@ -183,10 +221,10 @@ private:
     bool tracking_ = false;
 
     Palette pal_;
-    ComPtr<ID2D1Factory> d2d_;
+    ComPtr<ID2D1Factory1> d2d_;
     ComPtr<IDWriteFactory> dwrite_;
     ComPtr<IWICImagingFactory> wic_;
-    ComPtr<ID2D1HwndRenderTarget> rt_;
+    ComPtr<ID2D1RenderTarget> rt_;  // target being drawn: the panel surface, or the OSD
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<ID2D1PathGeometry> gearGeo_;
     ComPtr<ID2D1StrokeStyle> roundStroke_;
@@ -199,13 +237,23 @@ private:
     bool pumping_ = false;  // rendering frame after frame while animating
     bool warmed_ = false;   // the other view has been laid out once
     void StartFramePump();
+    void QueueFrame();
+    void AnimFrame();
 
-    bool outputsExpanded_ = false, inputsExpanded_ = false;  // Settings sections
-    HWND hexEdit_ = nullptr;  // custom meter colour field (a real EDIT control)
+    // Settings sections: Settings, Personalization, Inputs, Outputs. Each has a 0..1 expansion.
+    static constexpr int kSections = 4;
+    bool sectionOpen_[kSections] = {true, false, false, false};
+    Anim sectionAnim_[kSections] = {{1, 1, 1, 0}, {}, {}, {}};
+    std::map<std::wstring, Anim> deviceAnim_;
+    bool LayoutAnimating() const;
+    // Custom colour fields (real EDIT controls): 0 = meter, 1 = slider bar.
+    HWND hexEdit_[2] = {};
     HFONT hexFont_ = nullptr;
     HBRUSH hexBrush_ = nullptr;
-    D2D1_RECT_F hexRect_{};
+    D2D1_RECT_F hexRect_[2] = {};
     bool hexVisible_ = false;
+    bool previewVisible_ = false;  // the animated meter preview in Personalization
+    static LRESULT CALLBACK HexEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
     HWND osd_ = nullptr;
     ComPtr<ID2D1HwndRenderTarget> osdRt_;

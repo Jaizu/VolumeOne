@@ -7,6 +7,10 @@
 #include <unordered_map>
 
 static const PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+// The endpoint's own name, the one you can change in Sound settings ("Speakers").
+static const PROPERTYKEY kDeviceDescription = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 2};
+// The audio adapter's name, from its driver ("Realtek(R) Audio").
+static const PROPERTYKEY kInterfaceFriendlyName = {{0x026e516e, 0xb814, 0x414b, {0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22}}, 2};
 static const PROPERTYKEY kFormFactor = {{0x1da5d803, 0xd492, 0x4edd, {0x8c, 0x23, 0xe0, 0xc0, 0xff, 0xee, 0x7f, 0x0e}}, 0};
 
 // Identifies volume changes we made ourselves.
@@ -265,8 +269,17 @@ void AudioManager::RefreshDevices() {
         if (SUCCEEDED(d.device->OpenPropertyStore(STGM_READ, &props))) {
             PROPVARIANT v;
             PropVariantInit(&v);
-            if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR) d.name = v.pwszVal;
+            if (SUCCEEDED(props->GetValue(kDeviceDescription, &v)) && v.vt == VT_LPWSTR) d.name = v.pwszVal;
             PropVariantClear(&v);
+            PropVariantInit(&v);
+            if (SUCCEEDED(props->GetValue(kInterfaceFriendlyName, &v)) && v.vt == VT_LPWSTR)
+                d.technicalName = v.pwszVal;
+            PropVariantClear(&v);
+            if (d.name.empty()) {
+                PropVariantInit(&v);
+                if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR) d.name = v.pwszVal;
+                PropVariantClear(&v);
+            }
             if (SUCCEEDED(props->GetValue(kFormFactor, &v)) && v.vt == VT_UI4) {
                 switch (v.ulVal) {
                     case 1: case 2: case 8: case 9: d.formFactor = FormFactor::Speakers; break;
@@ -297,13 +310,13 @@ void AudioManager::RefreshDevices() {
     RefreshVolumes();
 }
 
-static std::wstring FriendlyName(IMMDevice* device) {
+static std::wstring DevicePropertyName(IMMDevice* device, const PROPERTYKEY& key) {
     std::wstring name;
     ComPtr<IPropertyStore> props;
     if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &props))) {
         PROPVARIANT v;
         PropVariantInit(&v);
-        if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR) name = v.pwszVal;
+        if (SUCCEEDED(props->GetValue(key, &v)) && v.vt == VT_LPWSTR) name = v.pwszVal;
         PropVariantClear(&v);
     }
     return name;
@@ -331,7 +344,9 @@ void AudioManager::LoadInputs() {
         InputDevice in;
         in.id = id;
         CoTaskMemFree(id);
-        in.name = FriendlyName(device.Get());
+        in.name = DevicePropertyName(device.Get(), kDeviceDescription);
+        in.technicalName = DevicePropertyName(device.Get(), kInterfaceFriendlyName);
+        if (in.name.empty()) in.name = DevicePropertyName(device.Get(), kFriendlyName);
         in.isDefault = in.id == defaultId;
         inputs_.push_back(std::move(in));
     }

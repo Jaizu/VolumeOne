@@ -6,13 +6,16 @@
 // the Windows display language, with English as the fallback. To add a
 // language, see lang\README.md.
 #define STRING_KEYS(X)                                                                                         \
-    X(settings) X(back)                                                                                        \
+    X(settings) X(personalization) X(inputs) X(outputs) X(back)                                                \
     X(useSystemIcon) X(useSystemIconDesc) X(hideQsVolume) X(hideQsVolumeDesc) X(hideSystemIcon)                \
     X(hideSystemIconDesc) X(startWithWindows) X(startWithWindowsDesc)                                          \
     X(meterColor) X(meterColorDesc) X(meterAccent) X(meterWhite) X(meterGreen) X(meterCustom)                  \
+    X(meterCustomLevel) X(meterCustomBar)                                                                      \
+    X(deviceName) X(deviceNameDesc) X(nameBoth) X(nameNickname) X(nameTechnical) X(renameInWindows)            \
+    X(renameInWindowsDesc) X(open)                                                                             \
     X(outputDevices) X(outputDevicesDesc) X(inputDevices) X(inputDevicesDesc) X(noDevices)                     \
     X(systemSounds) X(soundSettings) X(openMixer) X(windowsMixer) X(muted)                                     \
-    X(audioOutput) X(audioInput) X(noInputs)                                                                   \
+    X(audioOutput) X(audioInput) X(noInputs) X(changeOutput)                                                   \
     X(iconAuto) X(iconSpeakers) X(iconHeadphones) X(iconCustom) X(iconFiles)                                   \
     X(updates) X(checkUpdates) X(checking) X(upToDate) X(checkFailed) X(updateAvailable) X(updateNow)          \
     X(updating) X(updateFailed) X(whatsNew)                                                                    \

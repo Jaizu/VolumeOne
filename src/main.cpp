@@ -21,7 +21,6 @@ const UINT_PTR kTimerTapRetry = 2;
 const UINT_PTR kTimerUpdateCheck = 3;
 const UINT_PTR kTimerTapWatch = 4;  // re-inject if explorer or ShellHost restarted
 const UINT kTapWatchMs = 60 * 1000;
-const UINT kFirstUpdateCheckMs = 15 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
 enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdInputFirst = 100, IdOutputFirst = 200 };
@@ -351,12 +350,11 @@ void FinishMove(const wchar_t* cmdLine) {
     LocalFree(argv);
 }
 
-// "Close and restore Windows": no startup entry, no settings, and after the
-// message loop ends, explorer/ShellHost are restarted without our dll and the
-// app data folder is deleted.
+// "Close and restore Windows": no startup entry, and after the message loop
+// ends, explorer/ShellHost are restarted without our dll and its copies are
+// deleted. Settings and custom icons stay for the next launch.
 void CloseAndRestore() {
     SetStartWithWindows(false);
-    RegDeleteTreeW(HKEY_CURRENT_USER, APP_REG_KEY);
     g_restoreOnExit = true;
     DestroyWindow(g_host);
 }
@@ -391,9 +389,10 @@ void ShowMenu(int x, int y) {
     std::vector<std::wstring> outputIds;
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioOutput);
     for (const AudioDevice& d : g_audio.Devices()) {
-        if (g_settings.IsDeviceHidden(d.id)) continue;
+        if (!d.isDefault && g_settings.IsDeviceHidden(d.id)) continue;  // the current one always shows
         UINT id = IdOutputFirst + (UINT)outputIds.size();
-        AppendMenuW(menu, MF_STRING, id, d.name.c_str());
+        std::wstring name = g_settings.DisplayDeviceName(d.name, d.technicalName);
+        AppendMenuW(menu, MF_STRING, id, name.c_str());
         if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
         outputIds.push_back(d.id);
     }
@@ -402,9 +401,10 @@ void ShowMenu(int x, int y) {
     std::vector<std::wstring> inputIds;
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioInput);
     for (const InputDevice& in : g_audio.Inputs()) {
-        if (g_settings.IsDeviceHidden(in.id)) continue;
+        if (!in.isDefault && g_settings.IsDeviceHidden(in.id)) continue;
         UINT id = IdInputFirst + (UINT)inputIds.size();
-        AppendMenuW(menu, MF_STRING, id, in.name.c_str());
+        std::wstring name = g_settings.DisplayDeviceName(in.name, in.technicalName);
+        AppendMenuW(menu, MF_STRING, id, name.c_str());
         if (in.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
         inputIds.push_back(in.id);
     }
@@ -634,7 +634,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     UpdateTray(true);
     if (NeedsTap()) StartTapSync();
     if (!background) PostMessageW(g_host, WM_APP_SHOW_FLYOUT, 0, 0);
-    SetTimer(g_host, kTimerUpdateCheck, kFirstUpdateCheckMs, nullptr);
+    CheckForUpdates(false);  // on a worker thread
+    SetTimer(g_host, kTimerUpdateCheck, kUpdateCheckIntervalMs, nullptr);
     SetTimer(g_host, kTimerTapWatch, kTapWatchMs, nullptr);
 
     MSG msg;
@@ -652,8 +653,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
         TapClient::Unload();
         std::error_code ec;
         wchar_t* local = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local)))
-            std::filesystem::remove_all(std::filesystem::path(local) / APP_NAME, ec);
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local))) {
+            for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path(local) / APP_NAME, ec))
+                if (_wcsnicmp(e.path().filename().c_str(), L"VolumeOneTap", 12) == 0) std::filesystem::remove(e.path(), ec);
+        }
         CoTaskMemFree(local);
     }
     CloseHandle(g_runningMutex);

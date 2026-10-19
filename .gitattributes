@@ -1,0 +1,3 @@
+# cmd parses LF-only batch files wrongly (for /f, labels).
+*.cmd text eol=crlf
+*.bat text eol=crlf

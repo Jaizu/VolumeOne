@@ -24,6 +24,13 @@ void Settings::Load() {
     size = sizeof(value);
     if (RegQueryValueExW(key, L"MeterCustomColor", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
         meterCustomColor = value & 0xFFFFFF;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, L"MeterCustomBar", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS)
+        meterCustomBar = value & 0xFFFFFF;
+    size = sizeof(value);
+    if (RegQueryValueExW(key, L"DeviceNameMode", nullptr, nullptr, (BYTE*)&value, &size) == ERROR_SUCCESS &&
+        value <= NameTechnical)
+        deviceNameMode = value;
 
     hiddenDevices.clear();
     size = 0;
@@ -62,6 +69,8 @@ void Settings::Save() const {
     RegSetValueExW(key, REG_HIDE_QS_VOLUME, 0, REG_DWORD, (const BYTE*)&value, sizeof(value));
     RegSetValueExW(key, L"MeterColor", 0, REG_DWORD, (const BYTE*)&meterColor, sizeof(meterColor));
     RegSetValueExW(key, L"MeterCustomColor", 0, REG_DWORD, (const BYTE*)&meterCustomColor, sizeof(meterCustomColor));
+    RegSetValueExW(key, L"MeterCustomBar", 0, REG_DWORD, (const BYTE*)&meterCustomBar, sizeof(meterCustomBar));
+    RegSetValueExW(key, L"DeviceNameMode", 0, REG_DWORD, (const BYTE*)&deviceNameMode, sizeof(deviceNameMode));
 
     std::wstring multi;
     for (const auto& id : hiddenDevices) {
@@ -81,6 +90,21 @@ void Settings::Save() const {
         RegCloseKey(icons);
     }
     RegCloseKey(key);
+}
+
+static bool ContainsCaseInsensitive(const std::wstring& text, const std::wstring& value) {
+    if (value.empty() || value.size() > text.size()) return false;
+    for (size_t i = 0; i <= text.size() - value.size(); i++)
+        if (_wcsnicmp(text.c_str() + i, value.c_str(), value.size()) == 0) return true;
+    return false;
+}
+
+std::wstring Settings::DisplayDeviceName(const std::wstring& nickname, const std::wstring& technical) const {
+    if (deviceNameMode == NameNickname) return nickname.empty() ? technical : nickname;
+    if (deviceNameMode == NameTechnical) return technical.empty() ? nickname : technical;
+    if (nickname.empty()) return technical;
+    if (technical.empty() || ContainsCaseInsensitive(nickname, technical)) return nickname;
+    return nickname + L" (" + technical + L")";
 }
 
 bool Settings::IsDeviceHidden(const std::wstring& id) const {
