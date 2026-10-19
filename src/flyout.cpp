@@ -10,6 +10,8 @@ static const float kWidth = 360.0f;
 static const float kFooterHeight = 48.0f;  // same as the Quick Settings footer
 static const UINT_PTR kMeterTimer = 1;
 static const UINT WM_OUTSIDE_CLICK = WM_APP + 100;
+static const UINT WM_ANIM_FRAME = WM_APP + 101;  // next frame of an animation
+static const UINT WM_WARMUP = WM_APP + 102;      // lay out the other view once, after showing
 
 // While the flyout is open, a low-level mouse hook closes it on a click
 // anywhere else. Losing activation isn't enough: when it is opened from the
@@ -50,6 +52,34 @@ enum : wchar_t {
     kGlyphVolumeBars = 0xEBC5,
     kGlyphWarning = 0xE7BA,
 };
+
+#ifdef VO_PERF
+#include <cstdio>
+static double PerfNow() {
+    static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart * 1000.0 / f.QuadPart;
+}
+static void PerfLog(const char* what, double ms) {
+    static FILE* f = nullptr;
+    if (!f) {
+        wchar_t path[MAX_PATH];
+        GetTempPathW(MAX_PATH, path);
+        wcscat_s(path, L"VolumeOnePerf.log");
+        _wfopen_s(&f, path, L"w");
+    }
+    if (f) {
+        fprintf(f, "%10.1f %-14s %7.2f ms\n", PerfNow(), what, ms);
+        fflush(f);
+    }
+}
+#define PERF_BEGIN(name) double perf_##name = PerfNow()
+#define PERF_END(name, label) PerfLog(label, PerfNow() - perf_##name)
+#else
+#define PERF_BEGIN(name) ((void)0)
+#define PERF_END(name, label) ((void)0)
+#endif
 
 static D2D1_COLOR_F Rgba(UINT rgb, float a = 1.0f) {
     return D2D1::ColorF(((rgb >> 16) & 0xFF) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, a);
@@ -232,6 +262,7 @@ void Flyout::Toggle() {
 void Flyout::Show(bool settingsView) {
     if (visible_) {
         SetForegroundWindow(hwnd_);
+        GoToView(settingsView ? View::Settings : View::Mixer);
         return;
     }
     view_ = settingsView ? View::Settings : View::Mixer;
@@ -252,7 +283,7 @@ void Flyout::Show(bool settingsView) {
                  SWP_NOSIZE | SWP_NOACTIVATE);
 
     visible_ = true;
-    SetTimer(hwnd_, kMeterTimer, 16, nullptr);  // level meters and the gear animation
+    SetTimer(hwnd_, kMeterTimer, 10, nullptr);  // level meters (one ~15.6 ms timer tick)
     ShowWindow(hwnd_, SW_SHOW);
     SetForegroundWindow(hwnd_);
     UpdateWindow(hwnd_);
@@ -274,6 +305,7 @@ void Flyout::Show(bool settingsView) {
     }
     if (visible_)
         SetWindowPos(hwnd_, nullptr, final.left, final.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (visible_ && !warmed_) PostMessageW(hwnd_, WM_WARMUP, 0, 0);
     if (visible_ && !g_mouseHook) {
         g_hookOwner = this;
         g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, GetModuleHandleW(nullptr), 0);
@@ -298,11 +330,15 @@ void Flyout::Hide() {
 }
 
 void Flyout::Reposition(bool) {
+    PERF_BEGIN(repos);
     RECT anchor{};
     NOTIFYICONIDENTIFIER nii = {sizeof(nii)};
     nii.hWnd = owner_;
     nii.uID = 1;
-    if (FAILED(Shell_NotifyIconGetRect(&nii, &anchor))) {
+    PERF_BEGIN(rect);
+    HRESULT rectHr = Shell_NotifyIconGetRect(&nii, &anchor);
+    PERF_END(rect, "IconGetRect");
+    if (FAILED(rectHr)) {
         POINT pt;
         GetCursorPos(&pt);
         anchor = {pt.x, pt.y, pt.x + 1, pt.y + 1};
@@ -322,7 +358,9 @@ void Flyout::Reposition(bool) {
     const RECT& work = mi.rcWork;
     const RECT& full = mi.rcMonitor;
     winH_ = 100000.0f;
+    PERF_BEGIN(measure);
     float natural = Layout(false);
+    PERF_END(measure, "Measure");
     float maxH = (work.bottom - work.top) / scale_ - 24.0f;
     winH_ = std::min(natural, maxH);
     maxScroll_ = std::max(0.0f, natural - winH_);
@@ -346,9 +384,12 @@ void Flyout::Reposition(bool) {
         slideDx_ = 1;
         slideDy_ = 0;
     }
+    PERF_BEGIN(swp);
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+    PERF_END(swp, "SetWindowPos");
     if (rt_) rt_->Resize(D2D1::SizeU(w, h));
     InvalidateRect(hwnd_, nullptr, FALSE);
+    PERF_END(repos, "Reposition");
 }
 
 void Flyout::OnAudioStructureChanged() {
@@ -1025,6 +1066,7 @@ void Flyout::LayoutFooter(float top, bool draw) {
 }
 
 void Flyout::Render() {
+    PERF_BEGIN(render);
     if (!EnsureResources()) return;
     rt_->BeginDraw();
     rt_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -1033,8 +1075,11 @@ void Flyout::Render() {
     // to match Start and Quick Settings.
     Fill({0, 0, kWidth, winH_}, pal_.tint);
     Layout(true);
+    PERF_BEGIN(present);
     if (rt_->EndDraw() == D2DERR_RECREATE_TARGET) DiscardTarget();
+    PERF_END(present, "EndDraw");
     UpdateHexEdit();
+    PERF_END(render, "Render");
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,7 +1333,7 @@ static ComPtr<ID2D1PathGeometry> MakeGearGeometry(ID2D1Factory* f) {
 // View changes: the footer icon turns first (gear: half a turn; back arrow:
 // from pointing left to pointing down), then the new view slides in.
 
-static const float kIconTurnMs = 320, kSwitchDelayMs = 150, kTransitionMs = 220;
+static const float kIconTurnMs = 260, kSwitchDelayMs = 90, kTransitionMs = 200;
 
 void Flyout::GoToView(View v) {
     if (pending_ || v == view_) return;
@@ -1298,8 +1343,17 @@ void Flyout::GoToView(View v) {
         arrow_.Go(-90, kIconTurnMs);
     pending_ = true;
     pendingView_ = v;
-    pendingAt_ = GetTickCount64() + (ULONGLONG)kSwitchDelayMs;
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    pendingAt_ = NowMs() + kSwitchDelayMs;
+    StartFramePump();
+}
+
+// Animations render frame after frame: each EndDraw waits for the display's
+// vblank, so this runs at the monitor's refresh rate. (A WM_TIMER can't: its
+// 15.6 ms granularity and low priority gave 30 fps with hitches.)
+void Flyout::StartFramePump() {
+    if (pumping_) return;
+    pumping_ = true;
+    PostMessageW(hwnd_, WM_ANIM_FRAME, 0, 0);
 }
 
 void Flyout::SwitchView(View v) {
@@ -1314,6 +1368,7 @@ void Flyout::SwitchView(View v) {
     transition_.Set(0);
     transition_.Go(1, kTransitionMs);
     Reposition(false);
+    StartFramePump();
 }
 
 bool Flyout::Animating() const {
@@ -1575,18 +1630,45 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             return (LRESULT)hexBrush_;
         }
 
+        case WM_ANIM_FRAME:
+            if (!visible_) {
+                pumping_ = false;
+                return 0;
+            }
+            if (pending_ && NowMs() >= pendingAt_) SwitchView(pendingView_);
+            if (view_ == View::Mixer) audio_->UpdatePeaks();
+            Render();
+            ValidateRect(hwnd_, nullptr);
+            if (Animating())
+                PostMessageW(hwnd_, WM_ANIM_FRAME, 0, 0);
+            else
+                pumping_ = false;  // UpdateHexEdit ran in Render and shows the field now
+            return 0;
+
+        case WM_WARMUP:
+            // The first layout of a view is slow (DirectWrite loads line
+            // breaking, fonts...): do the other view now, while idle, instead
+            // of when the user switches to it.
+            if (!warmed_ && visible_ && !pumping_) {
+                warmed_ = true;
+                View current = view_;
+                float scroll = scroll_;
+                view_ = current == View::Mixer ? View::Settings : View::Mixer;
+                Layout(false);
+                view_ = current;
+                scroll_ = scroll;
+                Layout(false);  // hit areas back to the current view
+            }
+            return 0;
+
         case WM_OUTSIDE_CLICK:
             if (!modal_) Hide();  // menus and the file dialog are outside the flyout too
             return 0;
 
         case WM_TIMER:
-            if (wp == kMeterTimer && visible_) {
-                if (pending_ && GetTickCount64() >= pendingAt_) SwitchView(pendingView_);
-                bool animating = Animating();
-                bool peaks = view_ == View::Mixer && audio_->UpdatePeaks();
-                if (animating || peaks) InvalidateRect(hwnd_, nullptr, FALSE);
-                if (!animating && view_ == View::Settings) UpdateHexEdit();  // show it once the transition ends
-            }
+            // Level meters; animations have their own frame pump.
+            if (wp == kMeterTimer && visible_ && !pumping_ && view_ == View::Mixer && audio_->UpdatePeaks())
+                InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
 
         case WM_SIZE:

@@ -30,11 +30,24 @@ struct UpdateState {
     std::wstring notes;    // release notes, plain text
 };
 
+// Milliseconds from the high-resolution counter (GetTickCount64 moves in
+// ~15.6 ms steps, which makes animations visibly step).
+inline double NowMs() {
+    static const double freq = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return (double)f.QuadPart;
+    }();
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart * 1000.0 / freq;
+}
+
 // A value eased from one number to another over time (ease-out cubic).
 struct Anim {
     float from = 0, to = 0, ms = 1;
-    ULONGLONG start = 0;
-    float Progress() const { return std::min(1.0f, (GetTickCount64() - start) / ms); }
+    double start = 0;
+    float Progress() const { return std::min(1.0f, (float)((NowMs() - start) / ms)); }
     bool Running() const { return Progress() < 1.0f; }
     float Value() const {
         float t = Progress();
@@ -44,7 +57,7 @@ struct Anim {
         from = Value();
         to = target;
         ms = duration;
-        start = GetTickCount64();
+        start = NowMs();
     }
     void Set(float v) { from = to = v; start = 0; }
 };
@@ -182,7 +195,10 @@ private:
     int transitionDir_ = 1;
     bool pending_ = false;  // a view switch waiting for the icon animation
     View pendingView_ = View::Mixer;
-    ULONGLONG pendingAt_ = 0;
+    double pendingAt_ = 0;
+    bool pumping_ = false;  // rendering frame after frame while animating
+    bool warmed_ = false;   // the other view has been laid out once
+    void StartFramePump();
 
     bool outputsExpanded_ = false, inputsExpanded_ = false;  // Settings sections
     HWND hexEdit_ = nullptr;  // custom meter colour field (a real EDIT control)

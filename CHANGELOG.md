@@ -2,6 +2,13 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## Unreleased
+
+### Fixed
+- Switching between the mixer and Settings is smooth: animations now run at the display's refresh rate instead of stuttering at about 30 fps.
+- The first time Settings opens is no longer slow; it is prepared in the background when the flyout appears.
+- Launching VolumeOne with `/settings` while the flyout is open now animates to Settings.
+
 ## 1.3.0
 
 ### New
