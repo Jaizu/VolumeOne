@@ -552,11 +552,11 @@ void Flyout::Show(bool settingsView) {
         GoToView(settingsView ? View::Settings : View::Mixer);
         return;
     }
-    // The surface still holds whatever was drawn last; a different view needs
-    // its frame on screen before the window shows, or the old one flashes.
-    View want = settingsView ? View::Settings : View::Mixer;
-    bool viewChanged = want != view_;
-    view_ = want;
+    // The surface still holds whatever was drawn last, maybe long ago: the new
+    // frame (current apps, volumes, view) must reach the screen before the
+    // window shows, or the stale one flashes.
+    view_ = settingsView ? View::Settings : View::Mixer;
+    upToDateStale_ = update_ && update_->status == UpdateState::UpToDate;
     scroll_ = 0;
     deviceMenuOpen_ = false;
     menuAnim_.Set(0);
@@ -570,7 +570,7 @@ void Flyout::Show(bool settingsView) {
     Battery::Refresh();
 
     Reposition(false);
-    if (viewChanged) DwmFlush();
+    DwmFlush();
     RECT final;
     GetWindowRect(hwnd_, &final);
     int dist = (int)std::lround(24 * scale_);
@@ -1299,11 +1299,28 @@ float Flyout::LayoutSettings(float y, bool draw) {
         Fill({x0, top, x1, top + h}, pal_.card, 8);
         Stroke({x0, top, x1, top + h}, pal_.cardStroke, 8);
     };
+
+    // An (i) at the start of a row, centred on [top, bottom], with the label
+    // after it at labelX; hovering it shows the description as a tooltip.
+    // Pushed before the row's own hit so it wins. Drawn rather than the font
+    // glyph, which is too thin at this size.
+    const float labelX = textX + 26;
+    auto info = [&](const wchar_t* desc, float top, float bottom) {
+        float cx = textX + 8, cy = (top + bottom) / 2;
+        Hit h{HitKind::Info, InfoId(desc), -1, {cx - 12, cy - 12, cx + 12, cy + 12}};
+        hits_.push_back(h);
+        if (!draw) return;
+        brush_->SetColor(hover_ == h ? pal_.text : pal_.textSecondary);
+        rt_->DrawEllipse(D2D1::Ellipse({cx, cy}, 7.25f, 7.25f), brush_.Get(), 1.5f);
+        rt_->FillRoundedRectangle(D2D1::RoundedRect({cx - 1, cy - 1.5f, cx + 1, cy + 4.5f}, 1, 1), brush_.Get());
+        rt_->FillEllipse(D2D1::Ellipse({cx, cy - 3.75f}, 1.2f, 1.2f), brush_.Get());
+    };
+
     // A collapsible section: one card with a title row and a body that wipes
     // open/closed with the section's animation. `body` draws at the current y
     // and advances it; it is measured first, then drawn (shifted up while
     // animating so it slides out from under the header).
-    auto section = [&](int idx, const wchar_t* title, auto&& body) {
+    auto section = [&](int idx, const wchar_t* title, const wchar_t* desc, auto&& body) {
         const float hdrH = 48;
         float v = sectionAnim_[idx].Value();
         float hy = y, top = y + hdrH, h = 0;
@@ -1320,9 +1337,10 @@ float Flyout::LayoutSettings(float y, bool draw) {
         }
         float shown = PixelPart(h, v);
         card(hy, hdrH + shown);
+        if (desc) info(desc, hy, top);
         Button(hdr, draw, 7);
         if (draw) {
-            Text(title, fTitle_.Get(), {x0 + 16, hy, x1 - 56, top}, pal_.text);
+            Text(title, fTitle_.Get(), {desc ? labelX : x0 + 16, hy, x1 - 56, top}, pal_.text);
             DrawChevron({x1 - 36, hy, x1 - 12, top}, pal_.textSecondary, v);
             if (shown > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
         }
@@ -1343,35 +1361,41 @@ float Flyout::LayoutSettings(float y, bool draw) {
     };
     auto toggleRows = [&](const Row* rows, int rowCount) {
         for (int i = 0; i < rowCount; i++) {
-            float rh = 12 + 20 + TextHeight(rows[i].desc, fDesc_.Get(), textR - textX) + 12;
+            const float rh = 52;
             if (i > 0) divider();
             if (draw && !rows[i].enabled)
                 rt_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
                                                      D2D1::IdentityMatrix(), 0.4f),
                                nullptr);
+            info(rows[i].desc, y, y + rh);
             Hit h{rows[i].kind, -1, -1, {x0, y, x1, y + rh}};
             ToggleSwitch(h, x1 - 16 - 40, y + rh / 2, rows[i].on, draw);
             if (!rows[i].enabled) hits_.pop_back();
             if (draw) {
-                Text(rows[i].label, fBody_.Get(), {textX, y + 12, textR, y + 32}, pal_.text);
-                Text(rows[i].desc, fDesc_.Get(), {textX, y + 32, textR, y + rh}, pal_.textSecondary);
+                Text(rows[i].label, fBody_.Get(), {labelX, y, textR, y + rh}, pal_.text);
                 if (!rows[i].enabled) rt_->PopLayer();
             }
             y += rh;
         }
     };
 
-    // A labelled row with a button on the right.
-    auto buttonRow = [&](const wchar_t* label, const std::wstring& desc, const wchar_t* button, HitKind kind, bool accent,
-                         bool enabled) {
+    // A labelled row with a button on the right. `desc` goes behind an (i);
+    // a `status` line instead shows under the label.
+    auto buttonRow = [&](const wchar_t* label, const wchar_t* desc, const wchar_t* button, HitKind kind, bool accent,
+                         bool enabled, const std::wstring* status = nullptr) {
         float bw = TextWidth(button, fBody_.Get()) + 28;
-        float dh = TextHeight(desc, fDesc_.Get(), x1 - 12 - bw - 8 - textX);
-        float h = std::max(64.0f, 12 + 20 + dh + 12);
+        float dh = status ? TextHeight(*status, fDesc_.Get(), x1 - 12 - bw - 8 - textX) : 0;
+        float h = status ? std::max(64.0f, 12 + 20 + dh + 12) : 56;
         Hit btn{kind, -1, -1, {x1 - 12 - bw, y + h / 2 - 16, x1 - 12, y + h / 2 + 16}};
         if (enabled) hits_.push_back(btn);
+        if (desc) info(desc, y, y + h);
         if (draw) {
-            Text(label, fBody_.Get(), {textX, y + 12, btn.rect.left - 8, y + 32}, pal_.text);
-            Text(desc, fDesc_.Get(), {textX, y + 32, btn.rect.left - 8, y + 32 + dh}, pal_.textSecondary);
+            if (status) {
+                Text(label, fBody_.Get(), {textX, y + 12, btn.rect.left - 8, y + 32}, pal_.text);
+                Text(*status, fDesc_.Get(), {textX, y + 32, btn.rect.left - 8, y + 32 + dh}, pal_.textSecondary);
+            } else {
+                Text(label, fBody_.Get(), {labelX, y, btn.rect.left - 8, y + h}, pal_.text);
+            }
             D2D1_COLOR_F fill = accent ? pal_.accent : pal_.toggleOffFill;
             if (!enabled) fill.a *= 0.5f;
             else if (hover_ == btn) fill = accent ? D2D1::ColorF(fill.r, fill.g, fill.b, 0.9f) : pal_.subtleHover;
@@ -1389,14 +1413,11 @@ float Flyout::LayoutSettings(float y, bool draw) {
         bool custom = settings_->meterColor == Settings::MeterCustom;
         bool picker = custom && pickerField_ >= 0;
         const float kSvH = 120, kHueH = 14, kPickerH = kSvH + 10 + kHueH + 8;
-        float dh = TextHeight(S().meterColorDesc, fDesc_.Get(), x1 - x0 - 32);
-        float h = 12 + 20 + dh + 10 + 32 + (custom ? 8 + 18 + 32 : 0) + (picker ? kPickerH : 0) + 8 + 40 + 12;
-        if (draw) {
-            Text(S().meterColor, fBody_.Get(), {textX, y + 12, x1 - 16, y + 32}, pal_.text);
-            Text(S().meterColorDesc, fDesc_.Get(), {textX, y + 32, x1 - 16, y + 32 + dh}, pal_.textSecondary);
-        }
+        float h = 12 + 20 + 10 + 32 + (custom ? 8 + 18 + 32 : 0) + (picker ? kPickerH : 0) + 8 + 40 + 12;
+        info(S().meterColorDesc, y + 12, y + 32);
+        if (draw) Text(S().meterColor, fBody_.Get(), {labelX, y + 12, x1 - 16, y + 32}, pal_.text);
         const wchar_t* labels[] = {S().meterAccent, S().meterWhite, S().meterGreen, S().meterCustom};
-        float cy = y + 32 + dh + 10;
+        float cy = y + 32 + 10;
         float gap = 6, cw = (x1 - x0 - 32 - gap * 3) / 4;
         for (int i = 0; i < 4; i++) {
             float cx = textX + i * (cw + gap);
@@ -1469,13 +1490,10 @@ float Flyout::LayoutSettings(float y, bool draw) {
     // Device names: the name set in Windows Sound settings ("nickname"), the
     // driver's name ("technical"), or both, as Windows shows them.
     {
-        float dh = TextHeight(S().deviceNameDesc, fDesc_.Get(), x1 - x0 - 32);
-        if (draw) {
-            Text(S().deviceName, fBody_.Get(), {textX, y + 12, x1 - 16, y + 32}, pal_.text);
-            Text(S().deviceNameDesc, fDesc_.Get(), {textX, y + 32, x1 - 16, y + 32 + dh}, pal_.textSecondary);
-        }
+        info(S().deviceNameDesc, y + 12, y + 32);
+        if (draw) Text(S().deviceName, fBody_.Get(), {labelX, y + 12, x1 - 16, y + 32}, pal_.text);
         const wchar_t* labels[] = {S().nameBoth, S().nameNickname, S().nameTechnical};
-        float cy = y + 32 + dh + 10;
+        float cy = y + 32 + 10;
         float gap = 6, cw = (x1 - x0 - 32 - gap * 2) / 3;
         for (int i = 0; i < 3; i++) {
             float cx = textX + i * (cw + gap);
@@ -1560,8 +1578,10 @@ float Flyout::LayoutSettings(float y, bool draw) {
         HitKind kind = HitKind::CheckUpdates;
         bool enabled = true;
         switch (update_ ? update_->status : UpdateState::Idle) {
-            case UpdateState::Checking: status += std::wstring(L" · ") + S().checking; enabled = false; break;
-            case UpdateState::UpToDate: status += std::wstring(L" · ") + S().upToDate; break;
+            case UpdateState::Checking: button = S().checking; enabled = false; break;
+            case UpdateState::UpToDate:
+                if (!upToDateStale_) button = S().upToDate;
+                break;
             case UpdateState::Failed: status += std::wstring(L" · ") + S().checkFailed; break;
             case UpdateState::Available:
             case UpdateState::InstallFailed:
@@ -1575,7 +1595,7 @@ float Flyout::LayoutSettings(float y, bool draw) {
                 break;
             default: break;
         }
-        buttonRow(S().updates, status, button, kind, kind == HitKind::InstallUpdate, enabled);
+        buttonRow(S().updates, nullptr, button, kind, kind == HitKind::InstallUpdate, enabled, &status);
 
         bool hasUpdate = update_ && (update_->status == UpdateState::Available ||
                                      update_->status == UpdateState::InstallFailed ||
@@ -1607,10 +1627,10 @@ float Flyout::LayoutSettings(float y, bool draw) {
         y = top + h + 12;
     };
 
-    section(0, S().settings, generalBody);
-    section(1, S().personalization, personalBody);
-    section(2, S().inputs, inputsBody);
-    section(3, S().outputs, outputsBody);
+    section(0, S().settings, nullptr, generalBody);
+    section(1, S().personalization, nullptr, personalBody);
+    section(2, S().inputs, S().inputDevicesDesc, inputsBody);
+    section(3, S().outputs, S().outputDevicesDesc, outputsBody);
     plainCard(updatesBody);
     return y;
 }
@@ -1957,6 +1977,7 @@ void Flyout::Activate(const Hit& h) {
             PickIcon(h.device);
             return;
         case HitKind::CheckUpdates:
+            upToDateStale_ = false;
             if (onCheckUpdates) onCheckUpdates();
             break;
         case HitKind::InstallUpdate:
@@ -2060,7 +2081,10 @@ void Flyout::SwitchView(View v) {
     view_ = v;
     scroll_ = 0;
     hover_ = pressed_ = Hit{};
+    HideTooltip();
+    tipText_ = nullptr;
     if (v == View::Settings) startup_ = GetStartWithWindows();
+    upToDateStale_ = update_ && update_->status == UpdateState::UpToDate;
     gear_.Set(0);
     arrow_.Set(0);
     transitionDir_ = v == View::Settings ? 1 : -1;
@@ -2297,22 +2321,42 @@ ID2D1StrokeStyle* Flyout::RoundStroke() {
     return roundStroke_.Get();
 }
 
-// "Change output" label under the switch icon of the output selector, shown
-// after hovering the icon for a moment.
+int Flyout::InfoId(const wchar_t* text) {
+    auto it = std::find(infoTexts_.begin(), infoTexts_.end(), text);
+    if (it != infoTexts_.end()) return (int)(it - infoTexts_.begin());
+    infoTexts_.push_back(text);
+    return (int)infoTexts_.size() - 1;
+}
+
+// Tooltip under (or, near the bottom, over) what the mouse rests on: the
+// "Change output" label of the output selector's switch icon, or a settings
+// description behind its (i). Solid and well apart from the backdrop so the
+// longer descriptions read easily.
 void Flyout::DrawTooltip() {
-    if (!tipShown_ || view_ != View::Mixer) return;
-    const wchar_t* label = S().changeOutput;
-    float w = 0;
+    if (!tipShown_ || !tipText_) return;
+    const float maxW = kWidth - 24 - 20;
+    float w = 0, h = 16;
     ComPtr<IDWriteTextLayout> layout;
-    if (SUCCEEDED(dwrite_->CreateTextLayout(label, (UINT32)wcslen(label), fCaption_.Get(), kWidth, 32, &layout))) {
+    if (SUCCEEDED(dwrite_->CreateTextLayout(tipText_, (UINT32)wcslen(tipText_), fDesc_.Get(), maxW, 10000, &layout))) {
+        layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         DWRITE_TEXT_METRICS m;
-        if (SUCCEEDED(layout->GetMetrics(&m))) w = std::ceil(m.widthIncludingTrailingWhitespace);
+        if (SUCCEEDED(layout->GetMetrics(&m))) {
+            w = std::ceil(m.widthIncludingTrailingWhitespace);
+            h = std::ceil(m.height);
+        }
     }
-    float left = std::clamp(switchIconRect_.left, 4.0f, kWidth - 4 - (w + 16));
-    D2D1_RECT_F r = {left, switchIconRect_.bottom + 4, left + w + 16, switchIconRect_.bottom + 30};
-    Fill(r, pal_.dark ? Rgba(0x2C2C2C) : Rgba(0xF9F9F9), 4);
-    Stroke(r, pal_.dark ? Rgba(0x000000, 0.3f) : Rgba(0x000000, 0.12f), 4);
-    Text(label, fCaption_.Get(), r, pal_.text, DWRITE_TEXT_ALIGNMENT_CENTER);
+    if (!layout) return;
+    float bw = w + 20, bh = h + 14;
+    float cx = (tipAnchor_.left + tipAnchor_.right) / 2;
+    float left = std::clamp(cx - bw / 2, 12.0f, kWidth - 12 - bw);
+    float top = tipAnchor_.bottom + 4;
+    if (top + bh > contentBottom_ - 4) top = tipAnchor_.top - 4 - bh;
+    D2D1_RECT_F r = {left, top, left + bw, top + bh};
+    Fill({r.left, r.top + 2, r.right, r.bottom + 3}, Rgba(0x000000, pal_.dark ? 0.35f : 0.12f), 6);  // shadow
+    Fill(r, pal_.dark ? Rgba(0x3A3A3A) : Rgba(0xFFFFFF), 6);
+    Stroke(r, pal_.dark ? Rgba(0xFFFFFF, 0.16f) : Rgba(0x000000, 0.16f), 6);
+    brush_->SetColor(pal_.dark ? Rgba(0xFFFFFF) : Rgba(0x000000));
+    rt_->DrawTextLayout({r.left + 10, r.top + 7}, layout.Get(), brush_.Get());
 }
 
 void Flyout::HideTooltip() {
@@ -2602,20 +2646,33 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
                 hover_ = h;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
-            bool overSwitch = h.kind == HitKind::DeviceMenu && x >= switchIconRect_.left && x < switchIconRect_.right &&
-                              y >= switchIconRect_.top && y < switchIconRect_.bottom;
-            if (!overSwitch) {
+            bool overSwitch = view_ == View::Mixer && h.kind == HitKind::DeviceMenu && x >= switchIconRect_.left &&
+                              x < switchIconRect_.right && y >= switchIconRect_.top && y < switchIconRect_.bottom;
+            const wchar_t* tip = nullptr;
+            D2D1_RECT_F anchor{};
+            if (overSwitch) {
+                tip = S().changeOutput;
+                anchor = switchIconRect_;
+            } else if (h.kind == HitKind::Info && h.device >= 0 && h.device < (int)infoTexts_.size()) {
+                tip = infoTexts_[h.device];
+                anchor = h.rect;
+            }
+            if (tip != tipText_) {
                 HideTooltip();
                 tipBlocked_ = false;
-            } else if (!tipArmed_ && !tipBlocked_) {
+                tipText_ = tip;
+                tipAnchor_ = anchor;
+            }
+            if (tip && !tipArmed_ && !tipShown_ && !tipBlocked_) {
                 tipArmed_ = true;
-                SetTimer(hwnd_, kTipTimer, 600, nullptr);
+                SetTimer(hwnd_, kTipTimer, overSwitch ? 600 : 250, nullptr);
             }
             return 0;
         }
         case WM_MOUSELEAVE:
             tracking_ = false;
             HideTooltip();
+            tipText_ = nullptr;
             if (!dragging_) {
                 hover_ = Hit{};
                 InvalidateRect(hwnd_, nullptr, FALSE);
@@ -2674,6 +2731,8 @@ LRESULT Flyout::WndProc(UINT msg, WPARAM wp, LPARAM lp) {
             } else if (maxScroll_ > 0) {
                 scroll_ = std::clamp(scroll_ - delta * 48.0f, 0.0f, maxScroll_);
                 hover_ = Hit{};
+                HideTooltip();  // its anchor moved
+                tipText_ = nullptr;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return 0;

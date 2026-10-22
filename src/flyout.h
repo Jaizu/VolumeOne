@@ -96,7 +96,7 @@ private:
     enum class HitKind {
         None, Mute, Slider, Collapse, DeviceMenu, SelectDevice, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
         ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
-        CloseRestore, MoveToDocuments, OpenLogs, ColorSwatch, ColorSV, ColorHue, ToggleNyan
+        CloseRestore, MoveToDocuments, OpenLogs, ColorSwatch, ColorSV, ColorHue, ToggleNyan, Info
     };
     struct Hit {
         HitKind kind = HitKind::None;
@@ -207,12 +207,18 @@ private:
     void SetDeviceMenu(bool open);
     D2D1_RECT_F switchIconRect_{};  // the output selector's switch icon, for its tooltip
     bool tipArmed_ = false, tipShown_ = false, tipBlocked_ = false;
+    const wchar_t* tipText_ = nullptr;  // what the tooltip says, for what the mouse is over
+    D2D1_RECT_F tipAnchor_{};           // ...and where that is
+    // Settings descriptions behind (i) icons: an Info hit's `device` indexes this.
+    std::vector<const wchar_t*> infoTexts_;
+    int InfoId(const wchar_t* text);
     void DrawTooltip();
     void HideTooltip();
     std::map<std::wstring, bool> expanded_;  // user's collapse/expand choices, by device id
     ULONGLONG lastHideTick_ = 0;
     View view_ = View::Mixer;
     bool startup_ = false;
+    bool upToDateStale_ = false;  // "up to date" is from an earlier Settings visit: don't show it
 
     float scale_ = 1.0f;
     float winH_ = 100000.0f;  // panel height in DIPs

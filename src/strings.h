@@ -20,7 +20,8 @@
     X(updates) X(checkUpdates) X(checking) X(upToDate) X(checkFailed) X(updateAvailable) X(updateNow)          \
     X(updating) X(updateFailed) X(whatsNew)                                                                    \
     X(closeAndRestore) X(closeAndRestoreDesc) X(closeAndRestoreButton) X(closeConfirmTitle) X(closeConfirm)    \
-    X(locationWarning) X(moveToDocuments) X(moveFailed) X(logs) X(logsDesc) X(openLogs) X(flyoutFailed)
+    X(locationWarning) X(moveToDocuments) X(moveFailed) X(logs) X(logsDesc) X(openLogs) X(flyoutFailed)          \
+    X(openContainingFolder)
 
 struct Strings {
 #define X(key) const wchar_t* key;

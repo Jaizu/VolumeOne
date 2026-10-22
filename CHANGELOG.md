@@ -2,6 +2,19 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.8.0
+
+### New
+- **Open containing folder** in the tray icon's right-click menu: opens the folder VolumeOne is in, with `VolumeOne.exe` selected.
+
+### Changed
+- Settings are tidier: the descriptions now sit behind an **(i)** next to each option and show as a tooltip when you hover it.
+- The Inputs and Outputs descriptions now make clear that turning a device off only hides it in VolumeOne; it stays enabled in Windows.
+- **Check for updates** shows "Checking…" and then "Up to date" on the button itself, instead of next to the version.
+
+### Fixed
+- Opening the mixer no longer briefly shows what it looked like the last time it was open (old apps or volumes) before updating.
+
 ## 1.7.0
 
 ### New

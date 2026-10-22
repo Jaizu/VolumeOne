@@ -25,7 +25,7 @@ const UINT_PTR kTimerTapWatch = 4;  // re-inject if explorer or ShellHost restar
 const UINT kTapWatchMs = 60 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
-enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdLogs, IdInputFirst = 100, IdOutputFirst = 200 };
+enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdLogs, IdFolder, IdInputFirst = 100, IdOutputFirst = 200 };
 
 HINSTANCE g_inst;
 HWND g_host;
@@ -242,15 +242,19 @@ void CheckForUpdates(bool manual) {
     if (g_update.status == UpdateState::Checking || g_update.status == UpdateState::Installing) return;
     g_updateManual = manual;
     if (manual) SetUpdateStatus(UpdateState::Checking);
-    HANDLE h = CreateThread(nullptr, 0, [](void*) -> DWORD {
+    HANDLE h = CreateThread(nullptr, 0, [](void* manual) -> DWORD {
+        ULONGLONG start = GetTickCount64();
         auto info = new Updater::ReleaseInfo;
         if (!Updater::FetchLatest(*info)) {
             delete info;
             info = nullptr;
         }
+        // A manual check keeps "Checking…" up for a moment, or it never shows.
+        ULONGLONG elapsed = GetTickCount64() - start;
+        if (manual && elapsed < 1000) Sleep(DWORD(1000 - elapsed));
         PostMessageW(g_host, WM_APP_UPDATE_CHECKED, 0, (LPARAM)info);
         return 0;
-    }, nullptr, 0, nullptr);
+    }, (void*)(INT_PTR)manual, 0, nullptr);
     if (h) CloseHandle(h);
 }
 
@@ -444,6 +448,7 @@ void ShowMenu(int x, int y) {
     AppendMenuW(menu, MF_STRING, IdSoundSettings, S().soundSettings);
     AppendMenuW(menu, MF_STRING, IdWindowsMixer, S().windowsMixer);
     AppendMenuW(menu, MF_STRING, IdLogs, S().openLogs);
+    AppendMenuW(menu, MF_STRING, IdFolder, S().openContainingFolder);
     if (g_update.status == UpdateState::Available) {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         std::wstring label = std::wstring(S().updateNow) + L" (" + g_update.version + L")";
@@ -487,6 +492,16 @@ void ShowMenu(int x, int y) {
         case IdLogs:
             Log::OpenFolder();
             break;
+        case IdFolder: {
+            // Opens Explorer on our folder with VolumeOne.exe selected.
+            wchar_t exe[MAX_PATH];
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            if (PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(exe)) {
+                SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+                ILFree(pidl);
+            }
+            break;
+        }
     }
 }
 
