@@ -51,7 +51,7 @@ Requires the MSVC toolchain (Visual Studio or Build Tools with "Desktop developm
 build.cmd
 ```
 
-Output: `bin\VolumeOne.exe` and `bin\VolumeOneRemover.exe`. The version lives in `src\version.h`; a release is tagged `v<version>` with both attached (`tools\release.ps1`).
+Output: `bin\VolumeOne.exe` and `bin\VolumeOneRemover.exe`. The version lives in `src\version.h`; pushing a new version to `main` publishes a release tagged `v<version>` with both attached (the Release workflow runs `tools\release.ps1`).
 
 ## How hiding the Windows volume icon works
 

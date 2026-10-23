@@ -1,0 +1,31 @@
+# Builds every push to main and, when src\version.h names a version that has
+# no GitHub release yet, publishes it (tools\release.ps1 -IfNew).
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        shell: cmd
+        run: call build.cmd
+
+      - name: Publish the release if it is a new version
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools\release.ps1 -IfNew
