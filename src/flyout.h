@@ -31,6 +31,10 @@ struct UpdateState {
     std::wstring notes;    // release notes, plain text
 };
 
+// Custom device icons: .ico (largest frame) or any image WIC can decode,
+// scaled to px.
+ComPtr<IWICBitmapSource> LoadDeviceImage(IWICImagingFactory* wic, const std::wstring& path, int px);
+
 // Milliseconds from the high-resolution counter (GetTickCount64 moves in
 // ~15.6 ms steps, which makes animations visibly step).
 inline double NowMs() {

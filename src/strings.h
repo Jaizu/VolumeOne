@@ -14,8 +14,7 @@
     X(deviceName) X(deviceNameDesc) X(nameBoth) X(nameNickname) X(nameTechnical) X(renameInWindows)            \
     X(renameInWindowsDesc) X(open)                                                                             \
     X(outputDevices) X(outputDevicesDesc) X(inputDevices) X(inputDevicesDesc) X(noDevices)                     \
-    X(systemSounds) X(soundSettings) X(openMixer) X(windowsMixer) X(muted)                                     \
-    X(audioOutput) X(audioInput) X(noInputs) X(changeOutput)                                                   \
+    X(systemSounds) X(soundSettings) X(more) X(windowsMixer) X(muted) X(changeOutput)                          \
     X(iconAuto) X(iconSpeakers) X(iconHeadphones) X(iconCustom) X(iconFiles)                                   \
     X(updates) X(checkUpdates) X(checking) X(upToDate) X(checkFailed) X(updateAvailable) X(updateNow)          \
     X(updating) X(updateFailed) X(whatsNew)                                                                    \

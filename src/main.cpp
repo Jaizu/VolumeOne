@@ -8,6 +8,7 @@
 #include "tapclient.h"
 #include "updater.h"
 
+#include <shellscalingapi.h>
 #include <shlobj.h>
 
 #include <atomic>
@@ -25,7 +26,7 @@ const UINT_PTR kTimerTapWatch = 4;  // re-inject if explorer or ShellHost restar
 const UINT kTapWatchMs = 60 * 1000;
 const UINT kUpdateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
-enum MenuId { IdOpen = 1, IdSettings, IdSoundSettings, IdWindowsMixer, IdUpdate, IdLogs, IdFolder, IdInputFirst = 100, IdOutputFirst = 200 };
+enum MenuId { IdSoundSettings = 1, IdWindowsMixer, IdUpdate, IdLogs, IdFolder, IdInputFirst = 100, IdOutputFirst = 200 };
 
 HINSTANCE g_inst;
 HWND g_host;
@@ -79,11 +80,8 @@ bool TaskbarIsLight() {
     return light != 0;
 }
 
-// Renders a Segoe Fluent Icons glyph into an icon, the same glyphs the
-// Windows volume icon uses, so it looks native in the tray.
-HICON MakeGlyphIcon(wchar_t glyph, bool light) {
-    int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
-
+// A size x size premultiplied 32-bit DIB, cleared to transparent.
+HBITMAP CreateArgbBitmap(int size, void** bits) {
     BITMAPINFO bi = {};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
     bi.bmiHeader.biWidth = size;
@@ -91,35 +89,38 @@ HICON MakeGlyphIcon(wchar_t glyph, bool light) {
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
     bi.bmiHeader.biCompression = BI_RGB;
+    HBITMAP bmp = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, bits, nullptr, 0);
+    if (bmp) memset(*bits, 0, size * size * 4);
+    return bmp;
+}
+
+// Renders a Segoe Fluent Icons glyph in one shade of gray (0 black, 255
+// white), optionally over a `back` glyph at 40%.
+HBITMAP GlyphBitmap(wchar_t glyph, wchar_t back, int size, BYTE gray) {
     void* bits = nullptr;
-    HDC screen = GetDC(nullptr);
-    HDC dc = CreateCompatibleDC(screen);
-    HBITMAP color = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    ReleaseDC(nullptr, screen);
-    HGDIOBJ oldBmp = SelectObject(dc, color);
+    HBITMAP bmp = CreateArgbBitmap(size, &bits);
+    if (!bmp) return nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HGDIOBJ oldBmp = SelectObject(dc, bmp);
 
     // Draw white on black, then use the coverage as alpha.
-    memset(bits, 0, size * size * 4);
     HFONT font = CreateFontW(-size, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe Fluent Icons");
     HGDIOBJ oldFont = SelectObject(dc, font);
     SetBkMode(dc, TRANSPARENT);
     RECT rc = {0, 0, size, size};
-    if (glyph != 0xE74F) {
-        // All the bars at 40%, under the level glyph, like the Windows icon.
-        const wchar_t bars = 0xEBC5;
+    if (back) {
         SetTextColor(dc, RGB(102, 102, 102));
-        DrawTextW(dc, &bars, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        DrawTextW(dc, &back, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     SetTextColor(dc, RGB(255, 255, 255));
     DrawTextW(dc, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiFlush();
 
-    BYTE c = light ? 0 : 255;
     auto px = (BYTE*)bits;
     for (int i = 0; i < size * size; i++, px += 4) {
         BYTE a = px[1];  // green channel = grayscale coverage
-        px[0] = px[1] = px[2] = (BYTE)(c * a / 255);
+        px[0] = px[1] = px[2] = (BYTE)(gray * a / 255);
         px[3] = a;
     }
 
@@ -127,7 +128,15 @@ HICON MakeGlyphIcon(wchar_t glyph, bool light) {
     SelectObject(dc, oldBmp);
     DeleteObject(font);
     DeleteDC(dc);
+    return bmp;
+}
 
+// Renders a Segoe Fluent Icons glyph into an icon, the same glyphs the
+// Windows volume icon uses, so it looks native in the tray.
+HICON MakeGlyphIcon(wchar_t glyph, bool light) {
+    int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem());
+    // All the bars at 40%, under the level glyph, like the Windows icon.
+    HBITMAP color = GlyphBitmap(glyph, glyph != 0xE74F ? 0xEBC5 : 0, size, light ? 0 : 255);
     HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
     ICONINFO ii = {TRUE, 0, 0, mask, color};
     HICON icon = CreateIconIndirect(&ii);
@@ -412,49 +421,119 @@ void EnsureFlyout() {
     g_flyout.onOpenLogs = [] { Log::OpenFolder(); };
 }
 
+// --- Context menu -----------------------------------------------------------
+
+// The menus follow the app theme (see InitDarkMenus).
+bool MenusAreLight() {
+    DWORD light = 1, size = sizeof(light);
+    RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                 L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+    return light != 0;
+}
+
+// A custom device icon as a menu bitmap, or null if it can't be read.
+HBITMAP ImageBitmap(const std::wstring& path, int size) {
+    ComPtr<IWICImagingFactory> wic;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))))
+        return nullptr;
+    ComPtr<IWICBitmapSource> image = LoadDeviceImage(wic.Get(), path, size);
+    ComPtr<IWICFormatConverter> conv;
+    if (!image || FAILED(wic->CreateFormatConverter(&conv)) ||
+        FAILED(conv->Initialize(image.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                WICBitmapPaletteTypeCustom)))
+        return nullptr;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateArgbBitmap(size, &bits);
+    if (bmp && FAILED(conv->CopyPixels(nullptr, size * 4, size * size * 4, (BYTE*)bits))) {
+        DeleteObject(bmp);
+        bmp = nullptr;
+    }
+    return bmp;
+}
+
+// The same icon the flyout shows for an output: the one picked in settings,
+// else speakers or headphones by form factor.
+HBITMAP OutputBitmap(const AudioDevice& d, int size, BYTE gray) {
+    auto it = g_settings.deviceIcons.find(d.id);
+    std::wstring v = it == g_settings.deviceIcons.end() ? L"" : it->second;
+    wchar_t glyph = d.formFactor == FormFactor::Headphones ? 0xE7F6 : 0xE7F5;
+    if (v == L"speakers") {
+        glyph = 0xE7F5;
+    } else if (v == L"headphones") {
+        glyph = 0xE7F6;
+    } else if (!v.empty()) {
+        if (HBITMAP bmp = ImageBitmap(v, size)) return bmp;
+    }
+    return GlyphBitmap(glyph, 0, size, gray);
+}
+
 void ShowMenu(int x, int y) {
     HMENU menu = CreatePopupMenu();
 
+    // Device icons in the menu text color, sized for the monitor the menu
+    // opens on (menus scale per monitor; their bitmaps don't).
+    UINT dpiX = 96, dpiY = 96;
+    GetDpiForMonitor(MonitorFromPoint({x, y}, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+    int iconSize = GetSystemMetricsForDpi(SM_CXSMICON, dpiX);
+    BYTE iconGray = MenusAreLight() ? 0 : 255;
+    std::vector<HBITMAP> icons;  // the menu doesn't own them
+    auto setIcon = [&](UINT id, HBITMAP bmp) {
+        MENUITEMINFOW mii = {sizeof(mii), MIIM_BITMAP};
+        mii.hbmpItem = bmp;
+        SetMenuItemInfoW(menu, id, FALSE, &mii);
+    };
+
     // Default output and input, as radio lists (minus the ones hidden in
-    // settings).
+    // settings). Only active devices are listed; a list with none visible
+    // is left out.
+    auto anyVisible = [](const auto& devices) {
+        return std::any_of(devices.begin(), devices.end(),
+                           [](const auto& d) { return !g_settings.IsDeviceHidden(d.id); });
+    };
     std::vector<std::wstring> outputIds;
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioOutput);
-    for (const AudioDevice& d : g_audio.Devices()) {
-        if (!d.isDefault && g_settings.IsDeviceHidden(d.id)) continue;  // the current one always shows
-        UINT id = IdOutputFirst + (UINT)outputIds.size();
-        std::wstring name = g_settings.DisplayDeviceName(d.name, d.technicalName);
-        AppendMenuW(menu, MF_STRING, id, name.c_str());
-        if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
-        outputIds.push_back(d.id);
+    if (anyVisible(g_audio.Devices())) {
+        for (const AudioDevice& d : g_audio.Devices()) {
+            if (!d.isDefault && g_settings.IsDeviceHidden(d.id)) continue;  // the current one always shows
+            UINT id = IdOutputFirst + (UINT)outputIds.size();
+            std::wstring name = g_settings.DisplayDeviceName(d.name, d.technicalName);
+            AppendMenuW(menu, MF_STRING, id, name.c_str());
+            icons.push_back(OutputBitmap(d, iconSize, iconGray));
+            setIcon(id, icons.back());
+            if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
+            outputIds.push_back(d.id);
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     std::vector<std::wstring> inputIds;
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().audioInput);
-    for (const InputDevice& in : g_audio.Inputs()) {
-        if (!in.isDefault && g_settings.IsDeviceHidden(in.id)) continue;
-        UINT id = IdInputFirst + (UINT)inputIds.size();
-        std::wstring name = g_settings.DisplayDeviceName(in.name, in.technicalName);
-        AppendMenuW(menu, MF_STRING, id, name.c_str());
-        if (in.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
-        inputIds.push_back(in.id);
+    if (anyVisible(g_audio.Inputs())) {
+        icons.push_back(GlyphBitmap(0xE720, 0, iconSize, iconGray));  // microphone, shared by the inputs
+        for (const InputDevice& in : g_audio.Inputs()) {
+            if (!in.isDefault && g_settings.IsDeviceHidden(in.id)) continue;
+            UINT id = IdInputFirst + (UINT)inputIds.size();
+            std::wstring name = g_settings.DisplayDeviceName(in.name, in.technicalName);
+            AppendMenuW(menu, MF_STRING, id, name.c_str());
+            setIcon(id, icons.back());
+            if (in.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
+            inputIds.push_back(in.id);
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
-    if (inputIds.empty()) AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, S().noInputs);
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(menu, MF_STRING, IdOpen, S().openMixer);
-    AppendMenuW(menu, MF_STRING, IdSettings, S().settings);
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IdSoundSettings, S().soundSettings);
-    AppendMenuW(menu, MF_STRING, IdWindowsMixer, S().windowsMixer);
-    AppendMenuW(menu, MF_STRING, IdLogs, S().openLogs);
-    AppendMenuW(menu, MF_STRING, IdFolder, S().openContainingFolder);
+    // No mixer or settings: a left click opens the mixer, with Settings in
+    // it. The rest go in a submenu (DestroyMenu takes it along).
+    HMENU more = CreatePopupMenu();
+    AppendMenuW(more, MF_STRING, IdSoundSettings, S().soundSettings);
+    AppendMenuW(more, MF_STRING, IdWindowsMixer, S().windowsMixer);
+    AppendMenuW(more, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(more, MF_STRING, IdLogs, S().openLogs);
+    AppendMenuW(more, MF_STRING, IdFolder, S().openContainingFolder);
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)more, S().more);
     if (g_update.status == UpdateState::Available) {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         std::wstring label = std::wstring(S().updateNow) + L" (" + g_update.version + L")";
         AppendMenuW(menu, MF_STRING, IdUpdate, label.c_str());
     }
-    SetMenuDefaultItem(menu, IdOpen, FALSE);
 
     SetForegroundWindow(g_host);
     UINT align = GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN;
@@ -462,6 +541,8 @@ void ShowMenu(int x, int y) {
     LOG(L"menu at %d,%d: command %d", x, y, cmd);
     PostMessageW(g_host, WM_NULL, 0, 0);
     DestroyMenu(menu);
+    for (HBITMAP bmp : icons)
+        if (bmp) DeleteObject(bmp);
 
     if (cmd >= IdOutputFirst && cmd < IdOutputFirst + (int)outputIds.size()) {
         g_audio.SetDefaultDevice(outputIds[cmd - IdOutputFirst]);
@@ -474,14 +555,6 @@ void ShowMenu(int x, int y) {
     switch (cmd) {
         case IdUpdate:
             InstallUpdate();
-            break;
-        case IdOpen:
-            EnsureFlyout();
-            if (g_flyoutCreated) g_flyout.Show();
-            break;
-        case IdSettings:
-            EnsureFlyout();
-            if (g_flyoutCreated) g_flyout.Show(true);
             break;
         case IdSoundSettings:
             ShellExecuteW(nullptr, L"open", L"ms-settings:sound", nullptr, nullptr, SW_SHOWNORMAL);

@@ -1009,14 +1009,10 @@ ComPtr<ID2D1Bitmap> Flyout::WicToD2D(IWICBitmapSource* src) {
     return bmp;
 }
 
-// Custom device icons: .ico (largest frame) or any image WIC can decode,
-// scaled to px.
-ComPtr<ID2D1Bitmap> Flyout::LoadImageBitmap(const std::wstring& path, int px) {
-    if (!wic_ && FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_))))
-        return nullptr;
+ComPtr<IWICBitmapSource> LoadDeviceImage(IWICImagingFactory* wic, const std::wstring& path, int px) {
     ComPtr<IWICBitmapDecoder> decoder;
-    if (FAILED(wic_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
-                                               &decoder)))
+    if (FAILED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                              &decoder)))
         return nullptr;
     UINT frames = 0, best = 0, bestW = 0;
     decoder->GetFrameCount(&frames);
@@ -1031,10 +1027,17 @@ ComPtr<ID2D1Bitmap> Flyout::LoadImageBitmap(const std::wstring& path, int px) {
     ComPtr<IWICBitmapFrameDecode> frame;
     if (FAILED(decoder->GetFrame(best, &frame))) return nullptr;
     ComPtr<IWICBitmapScaler> scaler;
-    if (FAILED(wic_->CreateBitmapScaler(&scaler)) ||
+    if (FAILED(wic->CreateBitmapScaler(&scaler)) ||
         FAILED(scaler->Initialize(frame.Get(), px, px, WICBitmapInterpolationModeHighQualityCubic)))
         return nullptr;
-    return WicToD2D(scaler.Get());
+    return scaler;
+}
+
+ComPtr<ID2D1Bitmap> Flyout::LoadImageBitmap(const std::wstring& path, int px) {
+    if (!wic_ && FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_))))
+        return nullptr;
+    ComPtr<IWICBitmapSource> image = LoadDeviceImage(wic_.Get(), path, px);
+    return image ? WicToD2D(image.Get()) : nullptr;
 }
 
 void Flyout::DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c) {
