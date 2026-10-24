@@ -18,8 +18,9 @@ struct Settings {
     DWORD deviceNameMode = NameBoth;
     bool nyanCat = false;  // sliders drawn as Nyan Cat with a rainbow trail
     std::vector<std::wstring> hiddenDevices;  // endpoint ids (outputs and inputs)
-    // Per-device icon: "speakers", "headphones" or the path of a custom icon
-    // copied into AppDataDir("icons"). Missing = automatic (from form factor).
+    // Per-device icon (outputs and inputs): "speakers", "headphones" or the
+    // path of a custom icon copied into AppDataDir("icons"). Missing =
+    // automatic (outputs by form factor, inputs a microphone).
     std::map<std::wstring, std::wstring> deviceIcons;
 
     void Load();

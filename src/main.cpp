@@ -451,12 +451,11 @@ HBITMAP ImageBitmap(const std::wstring& path, int size) {
     return bmp;
 }
 
-// The same icon the flyout shows for an output: the one picked in settings,
-// else speakers or headphones by form factor.
-HBITMAP OutputBitmap(const AudioDevice& d, int size, BYTE gray) {
-    auto it = g_settings.deviceIcons.find(d.id);
+// The same icon the flyout shows for a device: the one picked in settings,
+// else `glyph`.
+HBITMAP DeviceBitmap(const std::wstring& id, wchar_t glyph, int size, BYTE gray) {
+    auto it = g_settings.deviceIcons.find(id);
     std::wstring v = it == g_settings.deviceIcons.end() ? L"" : it->second;
-    wchar_t glyph = d.formFactor == FormFactor::Headphones ? 0xE7F6 : 0xE7F5;
     if (v == L"speakers") {
         glyph = 0xE7F5;
     } else if (v == L"headphones") {
@@ -497,7 +496,8 @@ void ShowMenu(int x, int y) {
             UINT id = IdOutputFirst + (UINT)outputIds.size();
             std::wstring name = g_settings.DisplayDeviceName(d.name, d.technicalName);
             AppendMenuW(menu, MF_STRING, id, name.c_str());
-            icons.push_back(OutputBitmap(d, iconSize, iconGray));
+            wchar_t glyph = d.formFactor == FormFactor::Headphones ? 0xE7F6 : 0xE7F5;  // by form factor
+            icons.push_back(DeviceBitmap(d.id, glyph, iconSize, iconGray));
             setIcon(id, icons.back());
             if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
             outputIds.push_back(d.id);
@@ -507,12 +507,12 @@ void ShowMenu(int x, int y) {
 
     std::vector<std::wstring> inputIds;
     if (anyVisible(g_audio.Inputs())) {
-        icons.push_back(GlyphBitmap(0xE720, 0, iconSize, iconGray));  // microphone, shared by the inputs
         for (const InputDevice& in : g_audio.Inputs()) {
             if (!in.isDefault && g_settings.IsDeviceHidden(in.id)) continue;
             UINT id = IdInputFirst + (UINT)inputIds.size();
             std::wstring name = g_settings.DisplayDeviceName(in.name, in.technicalName);
             AppendMenuW(menu, MF_STRING, id, name.c_str());
+            icons.push_back(DeviceBitmap(in.id, 0xE720, iconSize, iconGray));  // microphone
             setIcon(id, icons.back());
             if (in.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
             inputIds.push_back(in.id);

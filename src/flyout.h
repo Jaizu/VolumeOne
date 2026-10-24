@@ -99,7 +99,7 @@ private:
     enum class View { Mixer, Settings };
     enum class HitKind {
         None, Mute, Slider, Collapse, DeviceMenu, SelectDevice, Gear, Back, SoundSettings, ToggleUseSystemIcon, ToggleHideIcon, ToggleHideQs, ToggleStartup,
-        ToggleDevice, ToggleInput, IconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
+        ToggleDevice, ToggleInput, IconPick, InputIconPick, CheckUpdates, InstallUpdate, Section, MeterOption, NameOption,
         CloseRestore, MoveToDocuments, OpenLogs, ColorSwatch, ColorSV, ColorHue, ToggleNyan, Info
     };
     struct Hit {
@@ -168,7 +168,7 @@ private:
         return settings_->DisplayDeviceName(d.name, d.technicalName);
     }
     bool IsExpanded(const AudioDevice& d) const;
-    void PickIcon(int device);
+    void PickIcon(std::wstring id, bool input);  // by value: the device lists may change meanwhile
 
     // Drawing helpers (all coordinates in DIPs).
     void Fill(const D2D1_RECT_F& r, const D2D1_COLOR_F& c, float radius = 0);
@@ -187,6 +187,8 @@ private:
     void ToggleSwitch(const Hit& h, float x, float cy, bool on, bool draw);
     void AppIcon(const AppEntry& a, const D2D1_RECT_F& r, float opacity);
     void DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c);
+    // The icon picked in settings for a device, else `glyph`.
+    void DeviceIcon(const std::wstring& id, wchar_t glyph, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c);
     // The battery of the device's headset, ending at `right`; returns where it starts.
     float BatteryBadge(const AudioDevice& d, float right, float top, float bottom, bool draw);
     ComPtr<ID2D1Bitmap> LoadIconBitmap(const std::wstring& path, int px);

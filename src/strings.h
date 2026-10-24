@@ -15,7 +15,7 @@
     X(renameInWindowsDesc) X(open)                                                                             \
     X(outputDevices) X(outputDevicesDesc) X(inputDevices) X(inputDevicesDesc) X(noDevices)                     \
     X(systemSounds) X(soundSettings) X(more) X(windowsMixer) X(muted) X(changeOutput)                          \
-    X(iconAuto) X(iconSpeakers) X(iconHeadphones) X(iconCustom) X(iconFiles)                                   \
+    X(iconAuto) X(iconSpeakers) X(iconHeadphones) X(iconMicrophone) X(iconCustom) X(iconFiles)                \
     X(updates) X(checkUpdates) X(checking) X(upToDate) X(checkFailed) X(updateAvailable) X(updateNow)          \
     X(updating) X(updateFailed) X(whatsNew)                                                                    \
     X(closeAndRestore) X(closeAndRestoreDesc) X(closeAndRestoreButton) X(closeConfirmTitle) X(closeConfirm)    \

@@ -1041,9 +1041,13 @@ ComPtr<ID2D1Bitmap> Flyout::LoadImageBitmap(const std::wstring& path, int px) {
 }
 
 void Flyout::DeviceIcon(const AudioDevice& d, const D2D1_RECT_F& r, float size, const D2D1_COLOR_F& c) {
-    auto it = settings_->deviceIcons.find(d.id);
+    DeviceIcon(d.id, d.formFactor == FormFactor::Headphones ? kGlyphHeadphones : kGlyphSpeakers, r, size, c);
+}
+
+void Flyout::DeviceIcon(const std::wstring& id, wchar_t glyph, const D2D1_RECT_F& r, float size,
+                        const D2D1_COLOR_F& c) {
+    auto it = settings_->deviceIcons.find(id);
     std::wstring v = it == settings_->deviceIcons.end() ? L"" : it->second;
-    wchar_t glyph = d.formFactor == FormFactor::Headphones ? kGlyphHeadphones : kGlyphSpeakers;
     if (v == L"speakers") {
         glyph = kGlyphSpeakers;
     } else if (v == L"headphones") {
@@ -1535,7 +1539,7 @@ float Flyout::LayoutSettings(float y, bool draw) {
     y += 48.0f * devices.size();
     };
 
-    // Input devices: visibility in the right-click menu.
+    // Input devices: icon button + visibility in the right-click menu.
     auto inputsBody = [&] {
     auto& inputs = audio_->Inputs();
     for (int i = 0; i < (int)inputs.size(); i++) {
@@ -1543,11 +1547,13 @@ float Flyout::LayoutSettings(float y, bool draw) {
         float top = y + 48.0f * i;
         bool shown = !settings_->IsDeviceHidden(in.id);
         D2D1_COLOR_F c = shown ? pal_.text : pal_.textTertiary;
-        Hit h{HitKind::ToggleInput, i, -1, {x0, top, x1, top + 48}};
+        Hit icon{HitKind::InputIconPick, i, -1, {x0 + 4, top + 4, x0 + 44, top + 44}};
+        Button(icon, draw);
+        Hit h{HitKind::ToggleInput, i, -1, {x0 + 46, top, x1, top + 48}};
         ToggleSwitch(h, x1 - 16 - 40, top + 24, shown, draw);
         if (draw) {
             if (i > 0) Fill({x0 + 1, top, x1 - 1, top + 1}, pal_.divider);
-            Glyph(kGlyphMicrophone, 16, {x0 + 4, top + 4, x0 + 44, top + 44}, c);
+            DeviceIcon(in.id, kGlyphMicrophone, icon.rect, 16, c);
             Text(DeviceName(in), fBody_.Get(), {x0 + 52, top, x1 - 72, top + 48}, c);
         }
     }
@@ -1783,19 +1789,21 @@ bool Flyout::IsExpanded(const AudioDevice& d) const {
     return d.isDefault || d.playing;  // inactive devices start collapsed
 }
 
-void Flyout::PickIcon(int device) {
-    auto& devices = audio_->Devices();
-    if (device < 0 || device >= (int)devices.size()) return;
-    const std::wstring id = devices[device].id;
+// Outputs choose automatic, speakers, headphones or an image; inputs the
+// microphone or an image.
+void Flyout::PickIcon(std::wstring id, bool input) {
     auto it = settings_->deviceIcons.find(id);
     std::wstring current = it == settings_->deviceIcons.end() ? L"" : it->second;
     bool custom = !current.empty() && current != L"speakers" && current != L"headphones";
 
     enum { IdAuto = 1, IdSpeakers, IdHeadphones, IdCustom };
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING | (current.empty() ? MF_CHECKED : 0), IdAuto, S().iconAuto);
-    AppendMenuW(menu, MF_STRING | (current == L"speakers" ? MF_CHECKED : 0), IdSpeakers, S().iconSpeakers);
-    AppendMenuW(menu, MF_STRING | (current == L"headphones" ? MF_CHECKED : 0), IdHeadphones, S().iconHeadphones);
+    AppendMenuW(menu, MF_STRING | (current.empty() ? MF_CHECKED : 0), IdAuto,
+                input ? S().iconMicrophone : S().iconAuto);
+    if (!input) {
+        AppendMenuW(menu, MF_STRING | (current == L"speakers" ? MF_CHECKED : 0), IdSpeakers, S().iconSpeakers);
+        AppendMenuW(menu, MF_STRING | (current == L"headphones" ? MF_CHECKED : 0), IdHeadphones, S().iconHeadphones);
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING | (custom ? MF_CHECKED : 0), IdCustom, S().iconCustom);
 
@@ -1977,8 +1985,13 @@ void Flyout::Activate(const Hit& h) {
             break;
         }
         case HitKind::IconPick:
-            PickIcon(h.device);
+            if (h.device >= 0 && h.device < (int)devices.size()) PickIcon(devices[h.device].id, false);
             return;
+        case HitKind::InputIconPick: {
+            auto& inputs = audio_->Inputs();
+            if (h.device >= 0 && h.device < (int)inputs.size()) PickIcon(inputs[h.device].id, true);
+            return;
+        }
         case HitKind::CheckUpdates:
             upToDateStale_ = false;
             if (onCheckUpdates) onCheckUpdates();
