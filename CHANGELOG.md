@@ -2,6 +2,14 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.9.0
+
+### New
+- **Custom icons for inputs**: in Settings → Inputs, click a device's icon to choose the microphone or an image of your own (.ico, .png, .jpg or .bmp), as you already could for outputs.
+
+### Changed
+- The tray icon's right-click menu is shorter and shows device icons: each output and input appears with the same icon as in VolumeOne. **Open mixer** and **Settings** are gone (a left click opens the mixer, with Settings in it), and Sound settings, the Windows volume mixer, the diagnostic log and **Open containing folder** are now under **More**. A list of outputs or inputs only shows when one of its devices is visible.
+
 ## 1.8.0
 
 ### New
