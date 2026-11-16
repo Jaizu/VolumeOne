@@ -356,6 +356,22 @@ void AudioManager::LoadInputs() {
               [](const InputDevice& a, const InputDevice& b) { return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
 }
 
+bool AudioManager::DeviceExists(const std::wstring& id) {
+    if (!enumerator_) return true;
+    ComPtr<IMMDevice> device;
+    HRESULT hr = enumerator_->GetDevice(id.c_str(), &device);
+    return hr != HRESULT_FROM_WIN32(ERROR_NOT_FOUND);  // any other failure: don't guess
+}
+
+bool AudioManager::DeviceNames(const std::wstring& id, std::wstring& name, std::wstring& technical) {
+    ComPtr<IMMDevice> device;
+    if (!enumerator_ || FAILED(enumerator_->GetDevice(id.c_str(), &device))) return false;
+    name = DevicePropertyName(device.Get(), kDeviceDescription);
+    technical = DevicePropertyName(device.Get(), kInterfaceFriendlyName);
+    if (name.empty()) name = DevicePropertyName(device.Get(), kFriendlyName);
+    return !name.empty();
+}
+
 bool AudioManager::SetDefaultDevice(const std::wstring& id) {
     ComPtr<IPolicyConfig> policy;
     if (FAILED(CoCreateInstance(kPolicyConfigClient, nullptr, CLSCTX_ALL, __uuidof(IPolicyConfig), (void**)&policy)))

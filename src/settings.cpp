@@ -129,6 +129,84 @@ void Settings::Load() {
     deviceIcons.clear();
     for (const auto& [id, icon] : ReadSection(path, L"DeviceIcons"))
         if (!icon.empty()) deviceIcons[id] = icon;
+    deviceNames.clear();
+    for (const auto& [id, value] : ReadSection(path, L"DeviceNames")) {
+        size_t bar = value.rfind(L'|');
+        DeviceLabel l;
+        l.name = value.substr(0, bar);
+        if (bar != std::wstring::npos) l.technical = value.substr(bar + 1);
+        if (!l.name.empty()) deviceNames[id] = l;
+    }
+}
+
+bool Settings::HasDeviceSettings(const std::wstring& id) const {
+    return IsDeviceHidden(id) || deviceIcons.count(id) != 0;
+}
+
+// "{0.0.0.00000000}" for outputs, "{0.0.1.00000000}" for inputs.
+static std::wstring DeviceFlow(const std::wstring& id) { return id.substr(0, id.find(L'}') + 1); }
+
+void Settings::RelinkDevices(const std::vector<ActiveDevice>& active,
+                             const std::function<bool(const std::wstring&)>& gone) {
+    std::vector<std::wstring> ids = hiddenDevices;
+    for (const auto& [id, icon] : deviceIcons)
+        if (!IsDeviceHidden(id)) ids.push_back(id);
+
+    bool changed = false;
+    for (const std::wstring& old : ids) {
+        auto isOld = [&](const ActiveDevice& a) { return a.id == old; };
+        if (std::any_of(active.begin(), active.end(), isOld)) continue;
+        if (!gone(old)) continue;  // just unplugged
+        auto label = deviceNames.find(old);
+        if (label == deviceNames.end()) {
+            LOG(L"devices: %s is gone and its name isn't known", old.c_str());
+            continue;
+        }
+
+        // Same name and adapter, or failing that the same name, if only one
+        // device has it.
+        const ActiveDevice *exact = nullptr, *byName = nullptr;
+        int exactCount = 0, nameCount = 0;
+        for (const ActiveDevice& a : active) {
+            if (DeviceFlow(a.id) != DeviceFlow(old) || HasDeviceSettings(a.id)) continue;
+            if (_wcsicmp(a.label.name.c_str(), label->second.name.c_str()) != 0) continue;
+            nameCount++, byName = &a;
+            if (_wcsicmp(a.label.technical.c_str(), label->second.technical.c_str()) == 0) exactCount++, exact = &a;
+        }
+        const ActiveDevice* match = exactCount == 1 ? exact : exactCount == 0 && nameCount == 1 ? byName : nullptr;
+        if (!match) {
+            LOG(L"devices: %s (%s / %s) is gone, no single match (%d by name)", old.c_str(),
+                label->second.name.c_str(), label->second.technical.c_str(), nameCount);
+            continue;
+        }
+
+        bool hidden = IsDeviceHidden(old);
+        auto icon = deviceIcons.find(old);
+        LOG(L"devices: %s (%s / %s) is gone, its settings (hidden=%d icon=%s) move to %s", old.c_str(),
+            label->second.name.c_str(), label->second.technical.c_str(), hidden,
+            icon == deviceIcons.end() ? L"none" : icon->second.c_str(), match->id.c_str());
+        if (hidden) {
+            SetDeviceHidden(old, false);
+            SetDeviceHidden(match->id, true);
+        }
+        if (icon != deviceIcons.end()) {
+            deviceIcons[match->id] = icon->second;
+            deviceIcons.erase(icon);
+        }
+        deviceNames.erase(old);
+        changed = true;
+    }
+
+    // Names recorded or brought up to date (Save() writes the current ones).
+    auto stale = [&](const std::wstring& id) {
+        DeviceLabel l;
+        if (!lookupDevice || !lookupDevice(id, l)) return false;
+        auto it = deviceNames.find(id);
+        return it == deviceNames.end() || it->second.name != l.name || it->second.technical != l.technical;
+    };
+    changed = changed || std::any_of(hiddenDevices.begin(), hiddenDevices.end(), stale) ||
+              std::any_of(deviceIcons.begin(), deviceIcons.end(), [&](const auto& e) { return stale(e.first); });
+    if (changed) Save();
 }
 
 void Settings::Save() const {
@@ -156,6 +234,22 @@ void Settings::Save() const {
     for (size_t i = 0; i < hiddenDevices.size(); i++) line(L"Device" + std::to_wstring(i + 1), hiddenDevices[i]);
     text += L"\r\n; speakers, headphones or the path of an image\r\n[DeviceIcons]\r\n";
     for (const auto& [id, icon] : deviceIcons) line(id, icon);
+
+    // Only for the devices above; active ones with their current names.
+    std::map<std::wstring, DeviceLabel> names;
+    auto keep = [&](const std::wstring& id) {
+        DeviceLabel l;
+        if (lookupDevice && lookupDevice(id, l) && !l.name.empty())
+            names[id] = l;
+        else if (auto it = deviceNames.find(id); it != deviceNames.end())
+            names[id] = it->second;
+    };
+    for (const std::wstring& id : hiddenDevices) keep(id);
+    for (const auto& [id, icon] : deviceIcons) keep(id);
+    deviceNames = names;
+    text += L"\r\n; names of the devices above, so their settings follow them if Windows changes their id\r\n"
+            L"[DeviceNames]\r\n";
+    for (const auto& [id, l] : names) line(id, l.name + L"|" + l.technical);
 
     // Written next to it and swapped in, so the dll never reads half a file.
     std::wstring path = SettingsPath(), tmp = path + L".tmp";

@@ -3,6 +3,7 @@
 #include "battery.h"
 #include "flyout.h"
 #include "log.h"
+#include "menu.h"
 #include "settings.h"
 #include "strings.h"
 #include "tapclient.h"
@@ -466,25 +467,62 @@ HBITMAP DeviceBitmap(const std::wstring& id, wchar_t glyph, int size, BYTE gray)
     return GlyphBitmap(glyph, 0, size, gray);
 }
 
-void ShowMenu(int x, int y) {
-    HMENU menu = CreatePopupMenu();
+// Keeps the hidden state and icons on their devices when Windows gives them
+// new ids. Run after every device refresh; logs the lot on the first one.
+static void SyncDeviceSettings() {
+    std::vector<Settings::ActiveDevice> active;
+    for (const AudioDevice& d : g_audio.Devices()) active.push_back({d.id, {d.name, d.technicalName}});
+    for (const InputDevice& in : g_audio.Inputs()) active.push_back({in.id, {in.name, in.technicalName}});
+    g_settings.RelinkDevices(active, [](const std::wstring& id) { return !g_audio.DeviceExists(id); });
 
+    static bool logged = false;
+    if (logged) return;
+    logged = true;
+    for (const Settings::ActiveDevice& a : active)
+        LOG(L"devices: active %s %s / %s", a.id.c_str(), a.label.name.c_str(), a.label.technical.c_str());
+    std::vector<std::wstring> ids = g_settings.hiddenDevices;
+    for (const auto& [id, icon] : g_settings.deviceIcons)
+        if (!g_settings.IsDeviceHidden(id)) ids.push_back(id);
+    for (const std::wstring& id : ids) {
+        auto name = g_settings.deviceNames.find(id);
+        auto icon = g_settings.deviceIcons.find(id);
+        bool isActive = std::any_of(active.begin(), active.end(), [&](const auto& a) { return a.id == id; });
+        LOG(L"devices: settings for %s (%s / %s, %s): hidden=%d icon=%s", id.c_str(),
+            name == g_settings.deviceNames.end() ? L"?" : name->second.name.c_str(),
+            name == g_settings.deviceNames.end() ? L"?" : name->second.technical.c_str(),
+            isActive ? L"active" : g_audio.DeviceExists(id) ? L"unplugged" : L"gone", g_settings.IsDeviceHidden(id),
+            icon == g_settings.deviceIcons.end() ? L"none" : icon->second.c_str());
+    }
+}
+
+void ShowMenu(int x, int y) {
     // Device icons in the menu text color, sized for the monitor the menu
-    // opens on (menus scale per monitor; their bitmaps don't).
+    // opens on.
     UINT dpiX = 96, dpiY = 96;
     GetDpiForMonitor(MonitorFromPoint({x, y}, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
     int iconSize = GetSystemMetricsForDpi(SM_CXSMICON, dpiX);
-    BYTE iconGray = MenusAreLight() ? 0 : 255;
+    bool light = MenusAreLight();
+    BYTE iconGray = light ? 0 : 255;
     std::vector<HBITMAP> icons;  // the menu doesn't own them
-    auto setIcon = [&](UINT id, HBITMAP bmp) {
-        MENUITEMINFOW mii = {sizeof(mii), MIIM_BITMAP};
-        mii.hbmpItem = bmp;
-        SetMenuItemInfoW(menu, id, FALSE, &mii);
+    std::vector<MenuItem> items;
+    auto add = [&](UINT id, std::wstring text, HBITMAP icon = nullptr, bool current = false) {
+        MenuItem it;
+        it.id = id;
+        it.text = std::move(text);
+        it.icon = icon;
+        it.current = current;
+        if (icon) icons.push_back(icon);
+        items.push_back(std::move(it));
+    };
+    auto separator = [](std::vector<MenuItem>& list) {
+        MenuItem it;
+        it.separator = true;
+        list.push_back(std::move(it));
     };
 
-    // Default output and input, as radio lists (minus the ones hidden in
-    // settings). Only active devices are listed; a list with none visible
-    // is left out.
+    // Default output and input, with the current ones highlighted (minus
+    // the ones hidden in settings). Only active devices are listed; a list
+    // with none visible is left out.
     auto anyVisible = [](const auto& devices) {
         return std::any_of(devices.begin(), devices.end(),
                            [](const auto& d) { return !g_settings.IsDeviceHidden(d.id); });
@@ -493,54 +531,50 @@ void ShowMenu(int x, int y) {
     if (anyVisible(g_audio.Devices())) {
         for (const AudioDevice& d : g_audio.Devices()) {
             if (!d.isDefault && g_settings.IsDeviceHidden(d.id)) continue;  // the current one always shows
-            UINT id = IdOutputFirst + (UINT)outputIds.size();
-            std::wstring name = g_settings.DisplayDeviceName(d.name, d.technicalName);
-            AppendMenuW(menu, MF_STRING, id, name.c_str());
             wchar_t glyph = d.formFactor == FormFactor::Headphones ? 0xE7F6 : 0xE7F5;  // by form factor
-            icons.push_back(DeviceBitmap(d.id, glyph, iconSize, iconGray));
-            setIcon(id, icons.back());
-            if (d.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
+            add(IdOutputFirst + (UINT)outputIds.size(), g_settings.DisplayDeviceName(d.name, d.technicalName),
+                DeviceBitmap(d.id, glyph, iconSize, iconGray), d.isDefault);
             outputIds.push_back(d.id);
         }
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        separator(items);
     }
 
     std::vector<std::wstring> inputIds;
     if (anyVisible(g_audio.Inputs())) {
         for (const InputDevice& in : g_audio.Inputs()) {
             if (!in.isDefault && g_settings.IsDeviceHidden(in.id)) continue;
-            UINT id = IdInputFirst + (UINT)inputIds.size();
-            std::wstring name = g_settings.DisplayDeviceName(in.name, in.technicalName);
-            AppendMenuW(menu, MF_STRING, id, name.c_str());
-            icons.push_back(DeviceBitmap(in.id, 0xE720, iconSize, iconGray));  // microphone
-            setIcon(id, icons.back());
-            if (in.isDefault) CheckMenuRadioItem(menu, id, id, id, MF_BYCOMMAND);
+            add(IdInputFirst + (UINT)inputIds.size(), g_settings.DisplayDeviceName(in.name, in.technicalName),
+                DeviceBitmap(in.id, 0xE720, iconSize, iconGray), in.isDefault);  // microphone
             inputIds.push_back(in.id);
         }
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        separator(items);
     }
 
     // No mixer or settings: a left click opens the mixer, with Settings in
-    // it. The rest go in a submenu (DestroyMenu takes it along).
-    HMENU more = CreatePopupMenu();
-    AppendMenuW(more, MF_STRING, IdSoundSettings, S().soundSettings);
-    AppendMenuW(more, MF_STRING, IdWindowsMixer, S().windowsMixer);
-    AppendMenuW(more, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(more, MF_STRING, IdLogs, S().openLogs);
-    AppendMenuW(more, MF_STRING, IdFolder, S().openContainingFolder);
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)more, S().more);
+    // it. The rest go in a submenu.
+    add(0, S().more);
+    std::vector<MenuItem>& more = items.back().sub;
+    for (auto [id, text] : {std::pair{IdSoundSettings, S().soundSettings}, {IdWindowsMixer, S().windowsMixer}}) {
+        MenuItem it;
+        it.id = id;
+        it.text = text;
+        more.push_back(std::move(it));
+    }
+    separator(more);
+    for (auto [id, text] : {std::pair{IdLogs, S().openLogs}, {IdFolder, S().openContainingFolder}}) {
+        MenuItem it;
+        it.id = id;
+        it.text = text;
+        more.push_back(std::move(it));
+    }
     if (g_update.status == UpdateState::Available) {
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        std::wstring label = std::wstring(S().updateNow) + L" (" + g_update.version + L")";
-        AppendMenuW(menu, MF_STRING, IdUpdate, label.c_str());
+        separator(items);
+        add(IdUpdate, std::wstring(S().updateNow) + L" (" + g_update.version + L")");
     }
 
-    SetForegroundWindow(g_host);
-    UINT align = GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN;
-    int cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | align, x, y, g_host, nullptr);
+    bool rightAlign = GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0;
+    int cmd = (int)TrackMenu(items, x, y, rightAlign, light);
     LOG(L"menu at %d,%d: command %d", x, y, cmd);
-    PostMessageW(g_host, WM_NULL, 0, 0);
-    DestroyMenu(menu);
     for (HBITMAP bmp : icons)
         if (bmp) DeleteObject(bmp);
 
@@ -610,6 +644,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_APP_DEVICES_CHANGED:
             g_audio.RefreshDevices();
+            SyncDeviceSettings();
             UpdateTray();
             if (g_flyoutCreated) g_flyout.OnAudioStructureChanged();
             Battery::Refresh();
@@ -770,6 +805,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR cmdLine, int) {
     // Only what the tray icon needs happens before the message loop; the
     // flyout's Direct2D resources are created on first use.
     g_audio.Init(g_host);
+    g_settings.lookupDevice = [](const std::wstring& id, Settings::DeviceLabel& out) {
+        return g_audio.DeviceNames(id, out.name, out.technical);
+    };
+    SyncDeviceSettings();
     Battery::Start(g_host);
     UpdateTray(true);
     if (NeedsTap()) StartTapSync();

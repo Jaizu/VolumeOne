@@ -2,6 +2,15 @@
 
 All notable changes to VolumeOne. Each version's section is used as the notes of its GitHub release, and VolumeOne shows them in Settings when an update is available.
 
+## 1.10.0
+
+### Changed
+- The tray icon's right-click menu looks like a Windows 11 context menu (rounded, follows the app theme), and the current output and input are highlighted across the whole row.
+
+### Fixed
+- Custom icons and hidden devices no longer get lost when a Windows update recreates the audio devices with new ids. VolumeOne now remembers each device's name and moves its settings to the new device with the same name.
+- The diagnostic log lists every device with its hidden state and icon at startup, and notes when settings move to a new device.
+
 ## 1.9.0
 
 ### New

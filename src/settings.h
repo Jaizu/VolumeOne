@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#include <functional>
 #include <map>
 
 // Persistent settings, stored in %LOCALAPPDATA%\VolumeOne\settings.ini
@@ -22,6 +23,27 @@ struct Settings {
     // path of a custom icon copied into AppDataDir("icons"). Missing =
     // automatic (outputs by form factor, inputs a microphone).
     std::map<std::wstring, std::wstring> deviceIcons;
+
+    // The names of the devices in hiddenDevices and deviceIcons, so their
+    // settings can follow them when Windows gives a device a new id (some
+    // Windows updates recreate every audio endpoint).
+    struct DeviceLabel {
+        std::wstring name, technical;
+    };
+    mutable std::map<std::wstring, DeviceLabel> deviceNames;
+    // Set by the app: the names of a device Windows knows (false if it
+    // doesn't). Save() uses it to keep deviceNames current.
+    std::function<bool(const std::wstring& id, DeviceLabel& out)> lookupDevice;
+
+    struct ActiveDevice {
+        std::wstring id;
+        DeviceLabel label;
+    };
+    // Moves the icon and hidden state of each device whose id no longer
+    // exists (gone(id)) to the one active device of the same kind with the
+    // same names and no settings of its own. Saves if anything changed.
+    void RelinkDevices(const std::vector<ActiveDevice>& active, const std::function<bool(const std::wstring&)>& gone);
+    bool HasDeviceSettings(const std::wstring& id) const;
 
     void Load();
     void Save() const;

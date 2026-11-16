@@ -72,6 +72,11 @@ public:
     // Makes a device the default for every role (console, multimedia,
     // communications), like the Sound control panel does.
     bool SetDefaultDevice(const std::wstring& id);
+    // False once Windows has removed the endpoint for good (an unplugged
+    // device still exists).
+    bool DeviceExists(const std::wstring& id);
+    // The names of any endpoint Windows still knows, unplugged ones included.
+    bool DeviceNames(const std::wstring& id, std::wstring& name, std::wstring& technical);
 
     void SetDeviceVolume(AudioDevice& d, float v);
     void SetDeviceMute(AudioDevice& d, bool mute);
